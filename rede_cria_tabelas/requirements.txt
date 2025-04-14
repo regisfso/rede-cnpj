@@ -8,3 +8,5 @@ bs4
 wget
 parfive
 lxml
+pyarrow
+psutil

@@ -10,3 +10,4 @@ parfive
 lxml
 pyarrow
 psutil
+tqdm

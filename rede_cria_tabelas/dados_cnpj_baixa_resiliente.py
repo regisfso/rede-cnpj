@@ -4,7 +4,7 @@ Script para download resiliente de dados públicos do CNPJ.
 Verifica arquivos existentes, retoma downloads e valida integridade.
 """
 from bs4 import BeautifulSoup
-import requests, os, sys, time, glob, zipfile
+import requests, os, time, zipfile
 from tqdm import tqdm  # Adicione esta linha no início do script
 
 url_dados_abertos = "https://arquivos.receitafederal.gov.br/cnpj/dados_abertos_cnpj/"
@@ -154,9 +154,12 @@ def main():
 
     # Executa downloads mesmo com falhas parciais
     success_count = 0
+    total = len(arquivos_para_baixar)
+
     if arquivos_para_baixar:
-        print(f"\n🚀 Iniciando download de {len(arquivos_para_baixar)} arquivos...")
-        for url, filename in arquivos_para_baixar:
+        print(f"\n🚀 Iniciando download de {total} arquivos...")
+        for i, (url, filename) in enumerate(arquivos_para_baixar, 1):
+            print(f"\n📦 Baixando arquivo {i}/{total}: {filename}")
             if download_file(url, filename):
                 success_count += 1
     else:

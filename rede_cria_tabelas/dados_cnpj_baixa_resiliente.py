@@ -5,7 +5,9 @@ Verifica arquivos existentes, retoma downloads e valida integridade.
 """
 from bs4 import BeautifulSoup
 import requests, os, time, zipfile
-from tqdm import tqdm  # Adicione esta linha no início do script
+from tqdm import tqdm
+from tqdm.contrib.concurrent import thread_map
+
 
 url_dados_abertos = "https://arquivos.receitafederal.gov.br/cnpj/dados_abertos_cnpj/"
 pasta_zip = r"dados-publicos-zip"
@@ -16,6 +18,7 @@ headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36"
 }
 max_tentativas = 3  # Número máximo de tentativas por arquivo
+max_concorrentes = 4  # Número de downloads simultâneos
 
 
 def requisitos():
@@ -77,7 +80,7 @@ def download_file(url, filename):
     # Tenta baixar do zero
     for tentativa in range(1, max_tentativas + 1):
         try:
-            print(f"\n📥 Tentativa {tentativa}/{max_tentativas} para {filename}")
+            # print(f"\n📥 Tentativa {tentativa}/{max_tentativas} para {filename}")
             with requests.get(
                 url, headers=headers, stream=True, timeout=60
             ) as response:
@@ -98,7 +101,7 @@ def download_file(url, filename):
 
             # Validação rigorosa
             if is_zip_valid(file_path) and os.path.getsize(file_path) == remote_size:
-                print(f"✅ {filename} validado com sucesso!")
+                # print(f"✅ {filename} validado com sucesso!")
                 return True
             else:
                 raise Exception("Arquivo corrompido após download")
@@ -110,6 +113,11 @@ def download_file(url, filename):
 
     print(f"❌ Falha definitiva em {filename} após {max_tentativas} tentativas.")
     return False
+
+
+def baixar_com_args(args):
+    url, filename = args
+    return download_file(url, filename)
 
 
 def main():
@@ -153,21 +161,30 @@ def main():
         arquivos_para_baixar.append((url, filename))
 
     # Executa downloads mesmo com falhas parciais
-    success_count = 0
     total = len(arquivos_para_baixar)
 
     if arquivos_para_baixar:
-        print(f"\n🚀 Iniciando download de {total} arquivos...")
-        for i, (url, filename) in enumerate(arquivos_para_baixar, 1):
-            print(f"\n📦 Baixando arquivo {i}/{total}: {filename}")
-            if download_file(url, filename):
-                success_count += 1
+        print(
+            f"\n🚀 Iniciando download de {total} arquivos com até {max_concorrentes} simultâneos...\n"
+        )
+
+        # dispara os downloads em paralelo e coleta True/False
+        resultados = thread_map(
+            baixar_com_args,
+            arquivos_para_baixar,
+            max_workers=max_concorrentes,
+            desc="Download geral",
+        )
+
+        # soma os True para contar sucessos
+        success_count = sum(resultados)
+
+        # imprime o resumo usando success_count
+        print(
+            f"\n✅ {success_count} arquivos baixados com sucesso | ❌ {total - success_count} falhas."
+        )
     else:
         print("\n🎉 Todos os arquivos já estão atualizados!")
-
-    print(
-        f"\n✅ {success_count} arquivos baixados com sucesso | ❌ {len(arquivos_para_baixar)-success_count} falhas."
-    )
 
 
 if __name__ == "__main__":

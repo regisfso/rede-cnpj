@@ -3,13 +3,12 @@
 Script para download resiliente de dados públicos do CNPJ.
 Verifica arquivos existentes, retoma downloads e valida integridade.
 """
-from bs4 import BeautifulSoup
-import requests, os, time, zipfile
+import requests, os, time, zipfile, re
+from xml.etree import ElementTree
 from tqdm import tqdm
 from tqdm.contrib.concurrent import thread_map
 
 
-url_dados_abertos = "https://arquivos.receitafederal.gov.br/cnpj/dados_abertos_cnpj/"
 pasta_zip = r"dados-publicos-zip"
 pasta_cnpj = "dados-publicos"
 
@@ -27,15 +26,53 @@ def requisitos():
     os.makedirs(pasta_zip, exist_ok=True)
 
 
-def get_remote_file_size(url):
-    """Obtém o tamanho remoto do arquivo."""
+def consulta_base_webdap(share_token="YggdBLfdninEJX9", base_url="https://arquivos.receitafederal.gov.br/public.php/webdav"):
+    """Lista o mês mais recente e os arquivos zip disponíveis via WebDAV.
+    A Receita mudou o layout da página de download em fev/2026; caso o
+    share_token pare de funcionar, será necessário obter um novo em
+    https://arquivos.receitafederal.gov.br/ (pasta Dados>Cadastros>CNPJ)."""
+    DAV_NS = {"d": "DAV:"}  # WebDAV XML namespace
+    url = base_url + "/"
+    response = requests.request("PROPFIND", url, auth=(share_token, ""), headers={"Depth": "1"})
+    response.raise_for_status()
+    root = ElementTree.fromstring(response.content)
+
+    directories = []
+    for response in root.findall("d:response", DAV_NS):
+        href = response.find("d:href", DAV_NS).text
+        match = re.search(r"(\d{4}-\d{2})/?$", href)  # pastas no formato YYYY-MM
+        if match:
+            directories.append(match.group(1))
+
+    ultimoAnoMes = directories[-1]
+    # obtem lista de arquivos do mês mais recente
+    response = requests.request("PROPFIND", url + ultimoAnoMes + "/", auth=(share_token, ""), headers={"Depth": "1"})
+    response.raise_for_status()
+    root = ElementTree.fromstring(response.content)
+
+    files = []
+    for response in root.findall("d:response", DAV_NS):
+        href = response.find("d:href", DAV_NS).text
+        match = re.search(r"/([^/]+\.zip)$", href, re.IGNORECASE)
+        if match:
+            files.append(match.group(1))
+
+    urlBaseArquivosDoMes = f"https://arquivos.receitafederal.gov.br/public.php/dav/files/{share_token}/{ultimoAnoMes}/"
+    return {"anoMes": ultimoAnoMes, "urlBaseArquivosDoMes": urlBaseArquivosDoMes, "arquivos": files}
+
+
+def consulta_base():
+    """Consulta a lista de arquivos disponíveis via webdap."""
     try:
-        response = requests.head(url, headers=headers, allow_redirects=True, timeout=30)
-        if response.status_code == 200:
-            return int(response.headers.get("Content-Length", 0))
-    except:
-        pass
-    return 0
+        r = consulta_base_webdap()
+        print("Consulta por webdap")
+        return r
+    except Exception as e:
+        print(f"⚠️  Erro ao consultar a lista de arquivos via webdap: {e}")
+        print("Navegue até https://arquivos.receitafederal.gov.br/ e localize a pasta Dados>Cadastros>CNPJ")
+        print("A url da página conterá um código (share_token) após .../index.php/s/")
+        print("Copie o código e atualize o parâmetro share_token de consulta_base_webdap.")
+        return None
 
 
 def is_zip_valid(file_path):
@@ -48,29 +85,32 @@ def is_zip_valid(file_path):
 
 
 def get_remote_file_size(url):
-    """Obtém o tamanho remoto do arquivo de forma robusta."""
+    """Obtém o tamanho remoto do arquivo. Retorna -1 se não for possível
+    determinar (falha de conexão ou servidor não informa Content-Length),
+    caso em que o tamanho não deve ser usado para validação."""
     try:
         with requests.get(url, headers=headers, stream=True, timeout=15) as response:
             if response.status_code == 200:
-                return int(response.headers.get("Content-Length", 0))
+                content_length = response.headers.get("Content-Length")
+                return int(content_length) if content_length is not None else -1
     except Exception as e:
         print(f"⚠️  Erro ao obter tamanho remoto: {str(e)}")
-    return -1  # Indica falha
+    return -1
 
 
 def download_file(url, filename):
     """Baixa o arquivo com tratamento robusto de erros."""
     file_path = os.path.join(pasta_zip, filename)
 
-    # Verificação inicial
+    # remote_size == -1 significa que não foi possível determinar o tamanho
+    # (falha de conexão, ou o servidor não informa Content-Length); nesse
+    # caso a validação de tamanho é ignorada e usa-se apenas is_zip_valid.
     remote_size = get_remote_file_size(url)
-    if remote_size == -1:
-        print(f"❌ Não foi possível obter informações de {filename}")
-        return False
 
     # Se o arquivo local existe e é válido, pula
     if os.path.exists(file_path):
-        if os.path.getsize(file_path) == remote_size and is_zip_valid(file_path):
+        tamanho_ok = remote_size == -1 or os.path.getsize(file_path) == remote_size
+        if tamanho_ok and is_zip_valid(file_path):
             print(f"⏩ {filename} já está OK.")
             return True
         else:
@@ -85,11 +125,12 @@ def download_file(url, filename):
                 url, headers=headers, stream=True, timeout=60
             ) as response:
                 response.raise_for_status()
-                total_size = int(response.headers.get("Content-Length", 0))
+                content_length = response.headers.get("Content-Length")
+                total_size = int(content_length) if content_length is not None else 0
 
                 with open(file_path, "wb") as f, tqdm(
                     desc=filename,
-                    total=total_size,
+                    total=total_size or None,
                     unit="B",
                     unit_scale=True,
                     unit_divisor=1024,
@@ -100,7 +141,8 @@ def download_file(url, filename):
                             bar.update(len(chunk))
 
             # Validação rigorosa
-            if is_zip_valid(file_path) and os.path.getsize(file_path) == remote_size:
+            tamanho_ok = remote_size == -1 or os.path.getsize(file_path) == remote_size
+            if is_zip_valid(file_path) and tamanho_ok:
                 # print(f"✅ {filename} validado com sucesso!")
                 return True
             else:
@@ -124,24 +166,17 @@ def main():
     requisitos()
     print(f"\n{time.asctime()} - Iniciando...")
 
-    # Obtém lista de arquivos
-    soup = BeautifulSoup(requests.get(url_dados_abertos).text, "lxml")
-    ultima_referencia = sorted(
-        [
-            link.get("href")
-            for link in soup.find_all("a")
-            if link.get("href").startswith("20")
-        ]
-    )[-1]
-    url = url_dados_abertos + ultima_referencia
-    soup = BeautifulSoup(requests.get(url).text, "lxml")
+    # Obtém lista de arquivos via WebDAV
+    parametrosSite = consulta_base()
+    if not parametrosSite:
+        print("❌ Não foi possível obter a lista de arquivos disponíveis.")
+        return
 
-    lista = [
-        url + link["href"] if not link["href"].startswith("http") else link["href"]
-        for link in soup.find_all("a")
-        if link["href"].endswith(".zip")
-    ]
+    ultima_referencia = parametrosSite["anoMes"]
+    urlBaseArquivosDoMes = parametrosSite["urlBaseArquivosDoMes"]
+    lista = [urlBaseArquivosDoMes + arq for arq in parametrosSite["arquivos"]]
 
+    print(f"\nÚltima base disponível: {ultima_referencia}")
     print(f"\n{len(lista)} arquivos encontrados:")
     for url in lista:
         print(f"🔗 {url}")
@@ -155,7 +190,8 @@ def main():
 
         if os.path.exists(file_path):
             local_size = os.path.getsize(file_path)
-            if local_size == remote_size and is_zip_valid(file_path):
+            tamanho_ok = remote_size == -1 or local_size == remote_size
+            if tamanho_ok and is_zip_valid(file_path):
                 print(f"⏩ {filename} já está OK. Pulando.")
                 continue
         arquivos_para_baixar.append((url, filename))

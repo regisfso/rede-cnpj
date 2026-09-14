@@ -11,3 +11,7 @@ rede_cria_tabelas/dados-publicos-zip
 # bases sqlite: sempre montadas como volume em tempo de execução (deploy/docker-compose.yaml),
 # não precisam ir para dentro da imagem
 rede/bases
+
+# certificados HTTPS: usados só pelo container nginx (imagem oficial, não passa por build),
+# não precisam ir no contexto de build da imagem da aplicação
+deploy/nginx/certs

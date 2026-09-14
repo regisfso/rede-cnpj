@@ -1,2 +1,6 @@
 *.pyc
 .venv
+
+# certificados HTTPS (auto-assinados ou reais): gerados/colocados localmente, nunca versionados
+deploy/nginx/certs/*
+!deploy/nginx/certs/.gitkeep

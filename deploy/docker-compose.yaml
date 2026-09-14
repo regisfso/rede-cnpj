@@ -20,8 +20,12 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+      - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+      # certificado gerado com gerar_certificado_autoassinado.sh, ou fornecido
+      # manualmente -- veja deploy/README.md, seção HTTPS
+      - ./nginx/certs:/etc/nginx/certs:ro
       - ../rede/static:/rede-cnpj/rede/static
     depends_on:
       - app

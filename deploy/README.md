@@ -23,7 +23,9 @@ rede-cnpj/                     # este repositório
 │   ├── wsgi.py
 │   ├── docker-compose.yaml
 │   ├── nginx/
-│   │   └── nginx.conf
+│   │   ├── nginx.conf
+│   │   ├── gerar_certificado_autoassinado.sh
+│   │   └── certs/             # fullchain.pem e privkey.pem (não versionados, veja HTTPS abaixo)
 │   └── README.md              # este arquivo
 ├── rede/                      # aplicação (código original + pasta bases com os .db)
 ├── rede_cria_tabelas/         # scripts para baixar e gerar os bancos sqlite
@@ -90,9 +92,38 @@ Na pasta raiz do usuário do servidor Linux:
 cd && git clone https://github.com/regisfso/rede-cnpj
 # Ajusta permissões de arquivos da pasta static do flask
 chmod -R 755 ~/rede-cnpj/rede/static/
-# Rodar o projeto para testes, acessível em http://ip/rede
-cd ~/rede-cnpj/deploy && docker-compose up --build
 ```
+
+---
+
+### HTTPS
+
+O nginx expõe as portas 80 e 443, mas o bloco HTTPS (443) exige um certificado em `deploy/nginx/certs/fullchain.pem` e `privkey.pem` — **sem isso o container do nginx não sobe**. Antes do primeiro `docker-compose up`, escolha uma das opções abaixo:
+
+**Opção 1 — certificado autoassinado** (uso interno, teste, sem domínio público). Rode o script, informando o domínio ou IP do servidor (o padrão é `localhost`):
+
+```bash
+cd ~/rede-cnpj/deploy/nginx
+./gerar_certificado_autoassinado.sh meuservidor.exemplo.com
+```
+
+O navegador vai exibir um aviso de segurança ao acessar por `https://` — normal para um certificado autoassinado.
+
+**Opção 2 — certificado real** (produção com domínio público, ex.: [Let's Encrypt](https://letsencrypt.org/)/certbot). Copie os arquivos do certificado para `deploy/nginx/certs/`, com estes nomes exatos:
+
+```bash
+cp /caminho/do/seu/fullchain.pem ~/rede-cnpj/deploy/nginx/certs/
+cp /caminho/do/seu/privkey.pem   ~/rede-cnpj/deploy/nginx/certs/
+```
+
+Escolhida uma das duas opções, suba os containers (e não esqueça de liberar a porta 443 no firewall do servidor, se houver um):
+
+```bash
+cd ~/rede-cnpj/deploy && docker-compose up --build
+# Acessível em http://ip/rede e https://ip/rede
+```
+
+Se quiser trocar o certificado depois (autoassinado por um real, ou gerar outro autoassinado), apague os dois arquivos em `deploy/nginx/certs/` e repita uma das opções acima, depois reinicie o container: `docker-compose restart nginx`.
 
 ---
 

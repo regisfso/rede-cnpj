@@ -2,7 +2,7 @@
 
 Conteineriza com Docker a instalação de produção deste fork do rede-cnpj (rictom/rede-cnpj).
 
-Diferente de uma instalação separada, aqui o `Dockerfile`, o `docker-compose.yaml` e o `wsgi.py` ficam dentro do próprio repositório, na pasta `deploy/`. Não é preciso clonar dois repositórios nem copiar arquivos manualmente entre eles: o código da aplicação (incluindo o `wsgi.py`) é incorporado à imagem no build. Só a pasta `rede/bases` (bases sqlite) e o `rede/rede.ini` são montados como volume, para poderem ser atualizados sem reconstruir a imagem.
+O código da aplicação (incluindo o `wsgi.py`) é incorporado à imagem no build. Só a pasta `rede/bases` (bases sqlite) e o `rede/rede.ini` são montados como volume, para poderem ser atualizados sem reconstruir a imagem.
 
 Ou seja: depois de um `git pull` com mudança de código, rode `docker-compose up --build`; depois de gerar uma base nova (veja abaixo), basta `docker-compose restart app`.
 

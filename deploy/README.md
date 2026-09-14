@@ -159,11 +159,12 @@ python rede_cria_tabela_rede.db.py
 # cria a tabela de vínculos cnpj_links_ete.db de endereços, de emails e de telefones utilizada na redeCNPJ: (1:45 h)
 python rede_cria_tabela_cnpj_links_ete.py
 
-# cnpj.db, rede.db, rede_search.db e cnpj_links_ete.db em rede/bases são exemplos
-# rastreados pelo git. Rode isto uma única vez, antes de sobrescrevê-los pela primeira
-# vez, para o git parar de rastrear o conteúdo (senão toda base de produção nova
-# aparecerá como "modified" no git status, arriscando ser commitada por engano):
-cd ~/rede-cnpj && git update-index --skip-worktree rede/bases/cnpj.db rede/bases/rede.db rede/bases/rede_search.db rede/bases/cnpj_links_ete.db
+# cnpj.db, rede.db, rede_search.db, cnpj_links_ete.db e rede.ini em rede/bases são
+# exemplos rastreados pelo git. Rode isto uma única vez, antes de sobrescrevê-los pela
+# primeira vez, para o git parar de rastrear o conteúdo (senão toda base de produção
+# nova, ou toda troca automática de rede.ini pelo atualiza_base.py, aparecerá como
+# "modified" no git status, arriscando ser commitada por engano):
+cd ~/rede-cnpj && git update-index --skip-worktree rede/bases/cnpj.db rede/bases/rede.db rede/bases/rede_search.db rede/bases/cnpj_links_ete.db rede/rede.ini
 
 # Ao final, mova os arquivos de rede_cria_tabelas/dados-publicos para a rede/bases
 cd ~/rede-cnpj/rede/bases && rm cnpj.db rede.db rede_search.db cnpj_links_ete.db
@@ -176,7 +177,8 @@ mv $HOME/rede-cnpj/rede_cria_tabelas/dados-publicos/rede_search.db $HOME/rede-cn
 
 mv $HOME/rede-cnpj/rede_cria_tabelas/dados-publicos/cnpj_links_ete.db $HOME/rede-cnpj/rede/bases/
 
-# Ajustar o arquivo rede.ini
+# Ajustar o arquivo rede.ini (só é necessário rodando estes passos manualmente;
+# rede_cria_tabelas/atualiza_base.py, descrito na próxima seção, faz isso sozinho)
 nano $HOME/rede-cnpj/rede/rede.ini
 
 referencia_bd = Abril/2025
@@ -184,6 +186,25 @@ exibe_mensagem_advertencia = 0
 ```
 
 Depois de gerar uma base nova, basta reiniciar o container `app` (`cd ~/rede-cnpj/deploy && docker-compose restart app`) — como `rede/bases` é montada como volume (veja `docker-compose.yaml`), não é necessário reconstruir a imagem. Mudança de **código** (`git pull` com commits na pasta `rede/`) exige `docker-compose up --build`.
+
+### Atualização automática mensal (cron)
+
+Em vez de repetir os passos manuais acima a cada mês, `rede_cria_tabelas/atualiza_base.py` automatiza todo o processo: baixa os zips, gera as 4 bases numa pasta de staging, valida cada uma (tamanho mínimo e contagem de linhas numa tabela-chave) e só então troca os arquivos em `rede/bases` de forma atômica, reiniciando o container. Se qualquer etapa falhar, a base em produção não é alterada (ou é restaurada a partir do backup, se a falha ocorrer durante a própria troca). Ele também mantém `rede/rede.ini` em dia: limpa `referencia_bd` e `exibe_mensagem_advertencia` (o rótulo/aviso de base de teste) e sincroniza a seção `[RFB]` com o mês mais recente disponível na Receita — os ajustes manuais de `rede.ini` do passo anterior não precisam ser repetidos.
+
+Exige pelo menos ~70GB livres no início (o conjunto novo de bases fica perto do tamanho do atual, mais a folga para os zips/csvs temporários da etapa de geração do cnpj.db) — o script aborta antes de começar se não houver espaço suficiente.
+
+```bash
+# usa o mesmo venv criado na seção anterior
+crontab -e
+```
+
+Adicione a linha (ajuste os caminhos para o seu servidor; roda todo dia 1 às 3h):
+
+```
+0 3 1 * * $HOME/rede-cnpj/rede_cria_tabelas/.venv/bin/python $HOME/rede-cnpj/rede_cria_tabelas/atualiza_base.py
+```
+
+Os logs de cada execução ficam em `rede_cria_tabelas/logs/`. O script resolve o caminho do `docker-compose` sozinho (via `PATH` ou `/usr/local/bin/docker-compose`), já que o `PATH` do cron costuma ser mais restrito que o do shell interativo.
 
 ### Cria serviço no Linux para iniciar automaticamente o docker-compose
 

@@ -3,7 +3,7 @@
 Script para download resiliente de dados públicos do CNPJ.
 Verifica arquivos existentes, retoma downloads e valida integridade.
 """
-import requests, os, time, zipfile, re
+import requests, os, time, zipfile, re, json
 from xml.etree import ElementTree
 from tqdm import tqdm
 from tqdm.contrib.concurrent import thread_map
@@ -11,6 +11,10 @@ from tqdm.contrib.concurrent import thread_map
 
 pasta_zip = r"dados-publicos-zip"
 pasta_cnpj = "dados-publicos"
+
+# usado tanto como default de consulta_base_webdap quanto para montar a url da
+# página de download (urlPaginaDownloadMeses), que a função não retorna.
+SHARE_TOKEN = "YggdBLfdninEJX9"
 
 # Configurações
 headers = {
@@ -26,7 +30,7 @@ def requisitos():
     os.makedirs(pasta_zip, exist_ok=True)
 
 
-def consulta_base_webdap(share_token="YggdBLfdninEJX9", base_url="https://arquivos.receitafederal.gov.br/public.php/webdav"):
+def consulta_base_webdap(share_token=SHARE_TOKEN, base_url="https://arquivos.receitafederal.gov.br/public.php/webdav"):
     """Lista o mês mais recente e os arquivos zip disponíveis via WebDAV.
     A Receita mudou o layout da página de download em fev/2026; caso o
     share_token pare de funcionar, será necessário obter um novo em
@@ -175,6 +179,18 @@ def main():
     ultima_referencia = parametrosSite["anoMes"]
     urlBaseArquivosDoMes = parametrosSite["urlBaseArquivosDoMes"]
     lista = [urlBaseArquivosDoMes + arq for arq in parametrosSite["arquivos"]]
+
+    # grava para quem orquestra este script (ex.: atualiza_base.py) preencher a
+    # seção [RFB] do rede.ini sem precisar repetir a consulta ao WebDAV.
+    with open(os.path.join(pasta_cnpj, "_ultima_referencia_rfb.json"), "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "anoMes": ultima_referencia,
+                "urlBaseArquivosDoMes": urlBaseArquivosDoMes,
+                "urlPaginaDownloadMeses": f"https://arquivos.receitafederal.gov.br/index.php/s/{SHARE_TOKEN}",
+            },
+            f,
+        )
 
     print(f"\nÚltima base disponível: {ultima_referencia}")
     print(f"\n{len(lista)} arquivos encontrados:")

@@ -1,20 +1,23 @@
 # RedeCNPJ - Visualização de dados públicos de CNPJ
 
-Ferramenta para observar de forma gráfica os relacionamentos entre empresas e sócios, a partir dos dados públicos disponibilizados pela Receita Federal.<br>
+Ferramenta para observar de forma gráfica os relacionamentos entre empresas e sócios, a partir dos dados públicos disponibilizados pela [Receita Federal](https://dados.gov.br/dados/conjuntos-dados/cadastro-nacional-da-pessoa-juridica---cnpj). Os scripts possibilitam baixar os dados públicos, gerar o banco de dados local em sqlite e abrir o aplicativo que faz a visualização no navegador. <b>O código não foi feito por IA!!!</b><br>
+<br><br>
+**AVISO IMPORTANTE: Em agosto/2026 houve alteração no padrão dos csvs de sócios. A coluna cnpj_cpf_socio só tem o radical de cnpj (8 dígitos) se o sócio for empresa. A rotina foi corrigida para trocar o radical de cnpj pelo cnpj completo da empresa matriz.**<br>
+
 
 ### Vídeo no youtube<br>
 [![youtube](http://img.youtube.com/vi/nxz9Drhqn_I/0.jpg)](https://youtu.be/nxz9Drhqn_I)<br>
 
-Foi testada nos navegadores Firefox, Edge, Chrome e Safari. <br>
+A rotina foi testada nos navegadores Firefox, Edge, Chrome e Safari. <br>
 
 ## RedeCNPJ.com Online:
 A versão online com dados públicos funciona agora no site https://www.redecnpj.com. A versão online com acesso gratuito foi descontinuada em maio/2023.
 
 ## RedeCNPJ Demo Online:
-Uma versão demo, com base de dados incompleta está rodando em https://www.redecnpj.com.br/demo/. Nesta versão apenas o primeiro nome de sócio é exibido e algumas opções estão desabilitadas. [Aqui](https://redecnpj.pythonanywhere.com/rede/) roda outra versão sem dados reais de empresas. 
+Uma versão demo, com base de dados incompleta está rodando em https://www.redecnpj.com.br/demo/. Nesta versão apenas o primeiro nome de sócio é exibido e algumas opções estão desabilitadas. 
 
-## Versões Aplicativo:
-Para os usuários que não tem familiaridade com o Python, em [https://www.redecnpj.com.br/rede/aplicativo.html](https://www.redecnpj.com.br/rede/pag/aplicativo.html) é possível obter gratuitamente a versão "aplicativo" da RedeCNPJ e outro programa para Windows que baixa os arquivos de dados abertos do site da Receita Federal e converte para o formato para uso na RedeCNPJ. Os aplicativos foram gerados a partir do código fonte deste repositório. O procedimento de geração das tabelas levam várias horas e deve ser repetido mensalmente. Utilizar a versão online https://www.redecnpj.com evitará esse transtorno.<br>
+## Versão Aplicativo:
+Para os usuários que não tem familiaridade com o Python, em [https://www.redecnpj.com.br/rede/aplicativo.html](https://www.redecnpj.com.br/rede/pag/aplicativo.html?src=github) é possível obter gratuitamente a versão "aplicativo" da RedeCNPJ e outro programa para Windows ou para MacOS que baixa os arquivos de dados abertos do site da Receita Federal e converte para o formato da RedeCNPJ. Desta maneira, será possível fazer consultas com a <b>base pública completa</b> de empresas utilizando arquivos locais no formato sqlite. Os aplicativos foram gerados a partir do código fonte deste repositório. O procedimento de geração das tabelas levam várias horas e deve ser repetido mensalmente se quiser mantê-las atualizadas. Utilizar a versão online https://www.redecnpj.com evitará esse transtorno.<br>
 
 ## Versão em python (execução local):
 É preciso ter instalado no computador:
@@ -60,8 +63,9 @@ Orientações detalhadas para instalação em Windows no link https://github.com
 
 A roda do mouse expande ou diminui o tamanho da exibição.<br>
 Fazendo click duplo em um ícone, a rotina expande as ligações. Por exemplo, clique duplo no ícone de uma pessoa, exibirá todas as empresas que esta é sócia. Clique duplo em um ícone de CNPJ, exibirá todos os sócios da empresa.<br>
-Apertando SHIFT, é possível selecionar mais de um ícone. <br>
-Pressionando CTRL e arrastando na tela, adiciona a seleção os itens da área.
+<img width="491" height="498" alt="image" src="https://github.com/user-attachments/assets/9b781665-c987-4771-92db-6319c5bc603b" /><br>
+Apertando SHIFT e CLICK no mouse, é possível selecionar mais de um ícone. <br>
+Pressionando CTRL e arrastando na tela, os itens da área são adicionanos à seleção .
 Clicar no botão do meio do mouse (roda) faz aparecer janela para editar uma Nota, que aparece numa terceira linha abaixo do ícone.
 
 Outras opções da rede estão no menu contextual do mouse (botão direito), sendo configuradas teclas de atalho correspondentes aos comandos:
@@ -147,12 +151,13 @@ Os comandos valem para o último nó selecionado ou nós selecionados, que ficam
 Pressionando SHIFT e click, é possível selecionar mais de um ícone para fazer Exclusão ou para Expansão de vínculos.
 Pode-se arrastar células com listas de CNPJs do Excel para a janela, ou arrastar arquivos csv ou json.
 
-
-
 ## Fonte dos dados:
 
 #### Base de CNPJ
-Está disponível em https://dados.gov.br/dados/conjuntos-dados/cadastro-nacional-da-pessoa-juridica---cnpj ou https://dadosabertos.rfb.gov.br/CNPJ/ (http://200.152.38.155/CNPJ/).<br>
+Está disponível em https://dados.gov.br/dados/conjuntos-dados/cadastro-nacional-da-pessoa-juridica---cnpj<br>
+
+## Como gerar listas de empresas a partir de parâmetros:
+A partir da base em sqlite cnpj.db, o projeto https://github.com/rictom/cnpj_consulta gera listas a partir de parâmetros como UF, Município ou CNAE e exporta os dados de empresas para Excel. 
 
 ## Bibliotecas e outros projetos utilizados:
 Biblioteca em javascript para visualização:<br>
@@ -166,6 +171,29 @@ https://www.flaticon.com<br>
 https://fontawesome.com<br>
 
 ## Histórico de versões
+
+<b>versão 26.08 (agosto/2026)</b>
+- Houve alteração no layout dos csvs de sócios. A coluna cnpj_cpf_socio só tem o radical de cnpj (8 dígitos) se o sócio for empresa. A rotina dados_cnpj_para_sqlite.py foi corrigida para trocar o radical de cnpj pelo cnpj completo da empresa matriz para manter o padrão anterior.
+
+<b>versão 26.06 (junho/2026)</b>
+- Alteração no layout da tabela de busca rede_search.db;
+-	Possibilidade de enriquecer o gráfico com dados fornecidos pelo usuário;
+- Customização do tamanho do ícone;
+- Opção para agrupar itens;
+- Criação de mapas mentais simples a partir de texto da área de transferência;
+
+<b>versão 1.8 (março/2026)</b>
+- Atualização do script para baixar arquivos, baseado na rotina do projeto [cnpj-data-pipeline](https://github.com/caiopizzol/cnpj-data-pipeline).
+
+<b>versão 1.7 (novembro/2025)</b>
+- Opção tecla B faz busca editável em diversos sites de pesquisa: google, bing, duckduckgo, yandex, brave, reclameaqui, jusbrasil, escavador, facebook, instagram, internet archive.<br>
+
+<b>versão 1.6 (outubro/2025)</b>
+- Utiliza duckduckgo na rotina de busca.<br>
+
+<b>versão 1.5 (abril/2025)</b>
+- Correção para utilizar tecla Command ao invés de CTRL no MacOS.<br>
+
 <b>versão 1.2 (agosto/2024)</b>
 - Scripts para gerar as tabelas com dados completos em rede_criar_tabelas<br>
 

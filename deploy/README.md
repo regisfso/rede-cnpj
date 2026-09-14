@@ -206,6 +206,17 @@ Adicione a linha (ajuste os caminhos para o seu servidor; roda todo dia 1 às 3h
 
 Os logs de cada execução ficam em `rede_cria_tabelas/logs/`. O script resolve o caminho do `docker-compose` sozinho (via `PATH` ou `/usr/local/bin/docker-compose`), já que o `PATH` do cron costuma ser mais restrito que o do shell interativo.
 
+#### Monitoramento de erros (Sentry)
+
+`atualiza_base.py` reporta falhas do pipeline à Sentry (mesmo projeto/conta usado no argos) se a variável `SENTRY_DSN` estiver definida. Como o `crontab` não lê `.bashrc`/`.profile`, defina-a diretamente no próprio crontab, numa linha antes da tarefa:
+
+```
+SENTRY_DSN=https://sua-chave@seu-host-sentry/id-do-projeto
+0 3 1 * * $HOME/rede-cnpj/rede_cria_tabelas/.venv/bin/python $HOME/rede-cnpj/rede_cria_tabelas/atualiza_base.py
+```
+
+Sem `SENTRY_DSN` definido, o script segue funcionando normalmente — só fica sem alerta remoto em caso de falha (o log em `rede_cria_tabelas/logs/` continua sendo a fonte primária). Opcional: `SENTRY_ENVIRONMENT` (padrão `production`).
+
 ### Cria serviço no Linux para iniciar automaticamente o docker-compose
 
 Criar o arquivo do serviço

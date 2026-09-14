@@ -8,7 +8,8 @@ produção (rede/bases) de forma atômica, reiniciando o container da aplicaçã
 
 Se qualquer etapa falhar, a base em produção não é tocada (ou é restaurada a partir
 do backup, se a falha ocorrer durante a própria troca) e o processo termina com
-código de saída != 0 -- esse é o ponto para integrar captura de erros (Sentry).
+código de saída != 0 -- a falha é reportada à Sentry (ver configura_sentry) se
+SENTRY_DSN estiver definido no ambiente do cron.
 
 Uso: python atualiza_base.py
 Pasta de trabalho: os scripts chamados usam caminhos relativos (dados-publicos,
@@ -25,6 +26,9 @@ import sqlite3
 import subprocess
 import sys
 import time
+
+import sentry_sdk
+from sentry_sdk.integrations.logging import LoggingIntegration
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # rede_cria_tabelas/
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)  # rede-cnpj/
@@ -76,6 +80,55 @@ def configura_log():
         handlers=[logging.FileHandler(log_path, encoding="utf-8"), logging.StreamHandler(sys.stdout)],
     )
     logger.info("Log desta execução em %s", log_path)
+
+
+def _obter_sentry_release():
+    """Versão reportada à Sentry: SENTRY_RELEASE do ambiente se definido, senão o SHA
+    curto do commit atual (mesma lógica usada no projeto argos). Retorna None se nada
+    estiver disponível -- a Sentry aceita release=None (fica sem agrupamento por
+    versão)."""
+    env_release = os.getenv("SENTRY_RELEASE", "").strip()
+    if env_release:
+        return env_release
+    try:
+        sha = subprocess.check_output(
+            # -c safe.directory=*: evita "dubious ownership" quando o cron roda com um
+            # usuário diferente do dono do checkout.
+            ["git", "-c", "safe.directory=*", "rev-parse", "--short", "HEAD"],
+            cwd=REPO_ROOT,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2,
+        ).strip()
+    except (subprocess.SubprocessError, OSError):
+        return None
+    return f"rede-cnpj@{sha}" if sha else None
+
+
+def configura_sentry():
+    """Sem SENTRY_DSN no ambiente (ex.: variável não exportada no crontab -- crontab
+    não lê .bashrc/.profile), o monitoramento fica desativado e o cron segue
+    funcionando normalmente, só sem alerta remoto em caso de falha."""
+    dsn = os.getenv("SENTRY_DSN", "").strip()
+    if not dsn:
+        logger.info("SENTRY_DSN não definido: monitoramento de erros via Sentry desativado.")
+        return
+    environment = os.getenv("SENTRY_ENVIRONMENT", "production").strip()
+    sentry_sdk.init(
+        dsn=dsn,
+        environment=environment,
+        release=_obter_sentry_release(),
+        integrations=[
+            # event_level=None: os logger.info/warning/error de cada etapa (roda_etapa
+            # já loga a saída inteira dos subprocessos) viram breadcrumb, não issue
+            # própria -- quem reporta o evento é o capture_exception explícito em
+            # main(), com o traceback real e o histórico completo do pipeline até ali.
+            LoggingIntegration(level=logging.INFO, event_level=None),
+        ],
+        traces_sample_rate=0,
+        send_default_pii=False,
+    )
+    logger.info("Sentry inicializado (environment=%s).", environment)
 
 
 def adquire_lock():
@@ -335,6 +388,7 @@ def executa_pipeline():
 
 def main():
     configura_log()
+    configura_sentry()
     try:
         lock_file = adquire_lock()
     except PipelineError as e:
@@ -345,11 +399,11 @@ def main():
         executa_pipeline()
     except PipelineError as e:
         logger.error("Pipeline abortado: %s", e)
-        # PONTO DE INTEGRAÇÃO SENTRY: sentry_sdk.capture_exception(e)
+        sentry_sdk.capture_exception(e)
         sys.exit(1)
     except Exception as e:
         logger.exception("Erro inesperado no pipeline: %s", e)
-        # PONTO DE INTEGRAÇÃO SENTRY: sentry_sdk.capture_exception(e)
+        sentry_sdk.capture_exception(e)
         sys.exit(1)
     finally:
         lock_file.close()

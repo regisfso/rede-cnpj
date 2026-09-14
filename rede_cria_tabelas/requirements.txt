@@ -8,6 +8,9 @@ bs4
 wget
 parfive
 lxml
+
+# adicionados neste fork
 pyarrow
 psutil
 tqdm
+sentry-sdk

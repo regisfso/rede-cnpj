@@ -1,0 +1,27 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    environment:
+      - FLASK_ENV=production
+    volumes:
+      # o código (rede.py, wsgi.py, templates, etc.) já vai embutido na imagem (veja Dockerfile).
+      # só as bases sqlite e o rede.ini são montados, para atualizar sem rebuild.
+      - ../rede/bases:/rede-cnpj/rede/bases
+      - ../rede/rede.ini:/rede-cnpj/rede/rede.ini
+    working_dir: /rede-cnpj/rede
+    expose:
+      - "8000"
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+      - ../rede/static:/rede-cnpj/rede/static
+    depends_on:
+      - app

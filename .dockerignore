@@ -1,0 +1,13 @@
+.git
+.gitignore
+.venv
+**/__pycache__
+*.pyc
+
+# dados baixados/gerados pelos scripts de rede_cria_tabelas (podem chegar a dezenas de GB)
+rede_cria_tabelas/dados-publicos
+rede_cria_tabelas/dados-publicos-zip
+
+# bases sqlite: sempre montadas como volume em tempo de execução (deploy/docker-compose.yaml),
+# não precisam ir para dentro da imagem
+rede/bases

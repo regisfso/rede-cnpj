@@ -3,10 +3,11 @@
 Script para download resiliente de dados públicos do CNPJ.
 Verifica arquivos existentes, retoma downloads e valida integridade.
 """
-import requests, os, time, zipfile, re, json
+import requests, os, sys, time, zipfile, re, json, random
 from xml.etree import ElementTree
 from tqdm import tqdm
 from tqdm.contrib.concurrent import thread_map
+from requests.adapters import HTTPAdapter
 
 
 pasta_zip = r"dados-publicos-zip"
@@ -20,8 +21,27 @@ SHARE_TOKEN = "YggdBLfdninEJX9"
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36"
 }
-max_tentativas = 3  # Número máximo de tentativas por arquivo
-max_concorrentes = 4  # Número de downloads simultâneos
+# O servidor da Receita derruba conexões com frequência sob carga; como agora as
+# tentativas retomam de onde pararam (Range), múltiplas tentativas ficam baratas.
+# Backoff exponencial com teto de 30s: pior caso (arquivo totalmente inacessível)
+# é ~60s de espera por arquivo antes de desistir, não minutos.
+max_tentativas = int(os.environ.get("CNPJ_MAX_TENTATIVAS", "6"))
+BACKOFF_TETO_SEGUNDOS = 30
+# O servidor limita conexões simultâneas por IP (observado: 4 simultâneos = timeouts
+# em cascata). Ajustável via variável de ambiente sem editar o script.
+max_concorrentes = int(os.environ.get("CNPJ_MAX_CONCORRENTES", "2"))
+
+sessao = requests.Session()
+sessao.headers.update(headers)
+_adapter = HTTPAdapter(pool_connections=max_concorrentes, pool_maxsize=max_concorrentes)
+sessao.mount("https://", _adapter)
+sessao.mount("http://", _adapter)
+
+
+class ArquivoCorrompidoError(Exception):
+    """Levantada quando o arquivo, já com o tamanho esperado, falha na validação
+    de integridade -- diferente de uma falha de transporte, aqui não há como saber
+    quais bytes estão errados, então o único jeito seguro é recomeçar do zero."""
 
 
 def requisitos():
@@ -31,38 +51,56 @@ def requisitos():
 
 
 def consulta_base_webdap(share_token=SHARE_TOKEN, base_url="https://arquivos.receitafederal.gov.br/public.php/webdav"):
-    """Lista o mês mais recente e os arquivos zip disponíveis via WebDAV.
+    """Lista o mês mais recente e os arquivos zip disponíveis via WebDAV, junto com
+    o tamanho (getcontentlength) e a etag de cada um -- evita uma requisição GET
+    extra por arquivo só para descobrir o tamanho, e permite detectar com segurança
+    se um parcial em disco pertence à versão atual do arquivo remoto.
     A Receita mudou o layout da página de download em fev/2026; caso o
     share_token pare de funcionar, será necessário obter um novo em
     https://arquivos.receitafederal.gov.br/ (pasta Dados>Cadastros>CNPJ)."""
     DAV_NS = {"d": "DAV:"}  # WebDAV XML namespace
     url = base_url + "/"
-    response = requests.request("PROPFIND", url, auth=(share_token, ""), headers={"Depth": "1"})
+    response = sessao.request("PROPFIND", url, auth=(share_token, ""), headers={"Depth": "1"}, timeout=(15, 60))
     response.raise_for_status()
     root = ElementTree.fromstring(response.content)
 
     directories = []
-    for response in root.findall("d:response", DAV_NS):
-        href = response.find("d:href", DAV_NS).text
+    for resp in root.findall("d:response", DAV_NS):
+        href = resp.find("d:href", DAV_NS).text
         match = re.search(r"(\d{4}-\d{2})/?$", href)  # pastas no formato YYYY-MM
         if match:
             directories.append(match.group(1))
 
     ultimoAnoMes = directories[-1]
     # obtem lista de arquivos do mês mais recente
-    response = requests.request("PROPFIND", url + ultimoAnoMes + "/", auth=(share_token, ""), headers={"Depth": "1"})
+    response = sessao.request("PROPFIND", url + ultimoAnoMes + "/", auth=(share_token, ""), headers={"Depth": "1"}, timeout=(15, 60))
     response.raise_for_status()
     root = ElementTree.fromstring(response.content)
 
     files = []
-    for response in root.findall("d:response", DAV_NS):
-        href = response.find("d:href", DAV_NS).text
+    tamanhos = {}
+    etags = {}
+    for resp in root.findall("d:response", DAV_NS):
+        href = resp.find("d:href", DAV_NS).text
         match = re.search(r"/([^/]+\.zip)$", href, re.IGNORECASE)
-        if match:
-            files.append(match.group(1))
+        if not match:
+            continue
+        filename = match.group(1)
+        files.append(filename)
+        prop = resp.find("d:propstat/d:prop", DAV_NS)
+        tamanho_el = prop.find("d:getcontentlength", DAV_NS) if prop is not None else None
+        etag_el = prop.find("d:getetag", DAV_NS) if prop is not None else None
+        tamanhos[filename] = int(tamanho_el.text) if tamanho_el is not None and tamanho_el.text else None
+        etags[filename] = etag_el.text if etag_el is not None else None
 
     urlBaseArquivosDoMes = f"https://arquivos.receitafederal.gov.br/public.php/dav/files/{share_token}/{ultimoAnoMes}/"
-    return {"anoMes": ultimoAnoMes, "urlBaseArquivosDoMes": urlBaseArquivosDoMes, "arquivos": files}
+    return {
+        "anoMes": ultimoAnoMes,
+        "urlBaseArquivosDoMes": urlBaseArquivosDoMes,
+        "arquivos": files,
+        "tamanhos": tamanhos,
+        "etags": etags,
+    }
 
 
 def consulta_base():
@@ -80,90 +118,137 @@ def consulta_base():
 
 
 def is_zip_valid(file_path):
-    """Verifica se o arquivo ZIP é válido."""
+    """Verifica a integridade completa do ZIP (decomprime e confere o CRC de
+    cada membro). Caro para arquivos grandes -- rodar só uma vez, logo após um
+    download terminar, nunca como checagem de 'já está OK' a cada execução."""
     try:
         with zipfile.ZipFile(file_path, "r") as zip_ref:
             return zip_ref.testzip() is None
-    except:
+    except Exception:
         return False
 
 
-def get_remote_file_size(url):
-    """Obtém o tamanho remoto do arquivo. Retorna -1 se não for possível
-    determinar (falha de conexão ou servidor não informa Content-Length),
-    caso em que o tamanho não deve ser usado para validação."""
+def is_zip_structurally_ok(file_path):
+    """Checagem barata: só confirma que o diretório central do ZIP é legível
+    (arquivo não truncado). Não decomprime membros, então não detecta corrupção
+    de dados -- suficiente para decidir se um arquivo já baixado pode ser pulado."""
     try:
-        with requests.get(url, headers=headers, stream=True, timeout=15) as response:
-            if response.status_code == 200:
-                content_length = response.headers.get("Content-Length")
-                return int(content_length) if content_length is not None else -1
-    except Exception as e:
-        print(f"⚠️  Erro ao obter tamanho remoto: {str(e)}")
-    return -1
+        with zipfile.ZipFile(file_path, "r"):
+            return True
+    except Exception:
+        return False
 
 
-def download_file(url, filename):
-    """Baixa o arquivo com tratamento robusto de erros."""
+def etag_path_de(file_path):
+    return file_path + ".etag"
+
+
+def download_file(url, filename, expected_size, expected_etag):
+    """Baixa o arquivo com retomada (HTTP Range) e backoff exponencial com jitter.
+
+    Em falha de transporte (timeout, conexão derrubada) o parcial é preservado e a
+    próxima tentativa retoma de onde parou. O parcial só é descartado quando o
+    arquivo COMPLETO falha na validação de integridade, ou quando não há garantia
+    de que ele pertence à versão atual do arquivo remoto (ver etag abaixo).
+    """
     file_path = os.path.join(pasta_zip, filename)
+    etag_path = etag_path_de(file_path)
+    local_size = 0
 
-    # remote_size == -1 significa que não foi possível determinar o tamanho
-    # (falha de conexão, ou o servidor não informa Content-Length); nesse
-    # caso a validação de tamanho é ignorada e usa-se apenas is_zip_valid.
-    remote_size = get_remote_file_size(url)
-
-    # Se o arquivo local existe e é válido, pula
     if os.path.exists(file_path):
-        tamanho_ok = remote_size == -1 or os.path.getsize(file_path) == remote_size
-        if tamanho_ok and is_zip_valid(file_path):
+        local_size = os.path.getsize(file_path)
+        tamanho_ok = expected_size is None or local_size == expected_size
+        if tamanho_ok and is_zip_structurally_ok(file_path):
             print(f"⏩ {filename} já está OK.")
             return True
-        else:
-            print(f"⚠️  {filename} incompleto/corrompido. Reiniciando download.")
-            os.remove(file_path)
 
-    # Tenta baixar do zero
+        # Sem tamanho esperado não há como avaliar se um parcial é retomável com
+        # segurança; e um parcial "menor que o esperado" só é confiável se a etag
+        # bater com a registrada quando o download começou -- caso contrário pode
+        # ser sobra de um mês anterior (dados-publicos-zip não é versionado por mês)
+        # cujo tamanho por coincidência é menor que o do arquivo atual.
+        etag_registrada = None
+        if os.path.exists(etag_path):
+            try:
+                etag_registrada = open(etag_path, "r", encoding="utf-8").read().strip()
+            except OSError:
+                etag_registrada = None
+
+        pode_retomar = (
+            expected_size is not None
+            and local_size < expected_size
+            and expected_etag is not None
+            and etag_registrada == expected_etag
+        )
+        if not pode_retomar:
+            os.remove(file_path)
+            local_size = 0
+
+    if local_size == 0 and expected_etag is not None:
+        with open(etag_path, "w", encoding="utf-8") as f:
+            f.write(expected_etag)
+
     for tentativa in range(1, max_tentativas + 1):
         try:
-            # print(f"\n📥 Tentativa {tentativa}/{max_tentativas} para {filename}")
-            with requests.get(
-                url, headers=headers, stream=True, timeout=60
-            ) as response:
-                response.raise_for_status()
-                content_length = response.headers.get("Content-Length")
-                total_size = int(content_length) if content_length is not None else 0
+            resumindo = local_size > 0
+            req_headers = {"Range": f"bytes={local_size}-"} if resumindo else {}
+            modo = "ab" if resumindo else "wb"
 
-                with open(file_path, "wb") as f, tqdm(
-                    desc=filename,
-                    total=total_size or None,
-                    unit="B",
-                    unit_scale=True,
-                    unit_divisor=1024,
-                ) as bar:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            bar.update(len(chunk))
+            with sessao.get(url, headers=req_headers, stream=True, timeout=(15, 60)) as response:
+                if resumindo and response.status_code == 200:
+                    # servidor ignorou o Range: trata como resposta completa e recomeça.
+                    modo = "wb"
+                    local_size = 0
+                else:
+                    response.raise_for_status()
+                    content_length = response.headers.get("Content-Length")
+                    total_size = (local_size + int(content_length)) if content_length else expected_size
+                    with open(file_path, modo) as f, tqdm(
+                        desc=filename,
+                        total=total_size,
+                        initial=local_size,
+                        unit="B",
+                        unit_scale=True,
+                        unit_divisor=1024,
+                    ) as bar:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+                                bar.update(len(chunk))
 
-            # Validação rigorosa
-            tamanho_ok = remote_size == -1 or os.path.getsize(file_path) == remote_size
-            if is_zip_valid(file_path) and tamanho_ok:
-                # print(f"✅ {filename} validado com sucesso!")
+            local_size = os.path.getsize(file_path)
+            tamanho_ok = expected_size is None or local_size == expected_size
+            if tamanho_ok and is_zip_valid(file_path):
+                if os.path.exists(etag_path):
+                    os.remove(etag_path)
                 return True
-            else:
-                raise Exception("Arquivo corrompido após download")
 
-        except Exception as e:
-            print(f"⚠️  Falha na tentativa {tentativa}: {str(e)}")
+            raise ArquivoCorrompidoError("tamanho ou CRC não confere após download completo")
+
+        except ArquivoCorrompidoError as e:
+            print(f"⚠️  {filename}: {e} (tentativa {tentativa}/{max_tentativas})")
             if os.path.exists(file_path):
                 os.remove(file_path)
+            local_size = 0
+            if expected_etag is not None:
+                with open(etag_path, "w", encoding="utf-8") as f:
+                    f.write(expected_etag)
+
+        except Exception as e:
+            print(f"⚠️  Falha na tentativa {tentativa}/{max_tentativas} de {filename}: {str(e)}")
+            local_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+
+        if tentativa < max_tentativas:
+            espera = min(BACKOFF_TETO_SEGUNDOS, 2 ** tentativa) + random.uniform(0, 1)
+            time.sleep(espera)
 
     print(f"❌ Falha definitiva em {filename} após {max_tentativas} tentativas.")
     return False
 
 
 def baixar_com_args(args):
-    url, filename = args
-    return download_file(url, filename)
+    url, filename, expected_size, expected_etag = args
+    return download_file(url, filename, expected_size, expected_etag)
 
 
 def main():
@@ -174,11 +259,16 @@ def main():
     parametrosSite = consulta_base()
     if not parametrosSite:
         print("❌ Não foi possível obter a lista de arquivos disponíveis.")
-        return
+        sys.exit(1)
 
     ultima_referencia = parametrosSite["anoMes"]
     urlBaseArquivosDoMes = parametrosSite["urlBaseArquivosDoMes"]
-    lista = [urlBaseArquivosDoMes + arq for arq in parametrosSite["arquivos"]]
+    tamanhos = parametrosSite["tamanhos"]
+    etags = parametrosSite["etags"]
+    lista = [
+        (urlBaseArquivosDoMes + arq, arq, tamanhos.get(arq), etags.get(arq))
+        for arq in parametrosSite["arquivos"]
+    ]
 
     # grava para quem orquestra este script (ex.: atualiza_base.py) preencher a
     # seção [RFB] do rede.ini sem precisar repetir a consulta ao WebDAV.
@@ -194,23 +284,20 @@ def main():
 
     print(f"\nÚltima base disponível: {ultima_referencia}")
     print(f"\n{len(lista)} arquivos encontrados:")
-    for url in lista:
+    for url, _, _, _ in lista:
         print(f"🔗 {url}")
 
-    # Filtra arquivos já válidos
+    # Filtra arquivos já válidos (checagem barata: só tamanho + diretório central legível)
     arquivos_para_baixar = []
-    for url in lista:
-        filename = os.path.basename(url)
-        remote_size = get_remote_file_size(url)
+    for url, filename, expected_size, expected_etag in lista:
         file_path = os.path.join(pasta_zip, filename)
-
         if os.path.exists(file_path):
             local_size = os.path.getsize(file_path)
-            tamanho_ok = remote_size == -1 or local_size == remote_size
-            if tamanho_ok and is_zip_valid(file_path):
+            tamanho_ok = expected_size is None or local_size == expected_size
+            if tamanho_ok and is_zip_structurally_ok(file_path):
                 print(f"⏩ {filename} já está OK. Pulando.")
                 continue
-        arquivos_para_baixar.append((url, filename))
+        arquivos_para_baixar.append((url, filename, expected_size, expected_etag))
 
     # Executa downloads mesmo com falhas parciais
     total = len(arquivos_para_baixar)
@@ -235,10 +322,13 @@ def main():
         print(
             f"\n✅ {success_count} arquivos baixados com sucesso | ❌ {total - success_count} falhas."
         )
+        if success_count < total:
+            sys.exit(1)
     else:
         print("\n🎉 Todos os arquivos já estão atualizados!")
 
 
 if __name__ == "__main__":
     main()
-    input("\nPressione Enter para sair.")
+    if sys.stdin.isatty():
+        input("\nPressione Enter para sair.")

@@ -13,9 +13,17 @@ from requests.adapters import HTTPAdapter
 pasta_zip = r"dados-publicos-zip"
 pasta_cnpj = "dados-publicos"
 
-# usado tanto como default de consulta_base_webdap quanto para montar a url da
-# página de download (urlPaginaDownloadMeses), que a função não retorna.
-SHARE_TOKEN = "YggdBLfdninEJX9"
+# Override manual: se definido, usado no lugar da descoberta automática (útil
+# se descobrir_share_token() parar de funcionar). Por padrão None -- o token é
+# descoberto a cada execução seguindo o redirect de arquivos.receitafederal.gov.br,
+# que sempre aponta para o compartilhamento público vigente. A Receita já trocou
+# esse token/layout mais de uma vez (fev/2026, set/2026) sem aviso.
+SHARE_TOKEN = None
+
+# Caminho, dentro do compartilhamento vigente, onde ficam as pastas YYYY-MM do
+# CNPJ. Também já mudou (antes ficava na raiz do share). Se a Receita mudar de
+# novo, consulta_base_webdap levanta um erro explicando como atualizar isto.
+CAMINHO_PASTA_CNPJ = "Dados/Cadastros/CNPJ"
 
 # Configurações
 headers = {
@@ -50,18 +58,50 @@ def requisitos():
     os.makedirs(pasta_zip, exist_ok=True)
 
 
-def consulta_base_webdap(share_token=SHARE_TOKEN, base_url="https://arquivos.receitafederal.gov.br/public.php/webdav"):
+def _requisicao_com_retry(metodo, url, **kwargs):
+    """Repete a requisição em caso de falha de transporte (timeout, conexão
+    recusada/derrubada) ou erro 5xx do servidor, com o mesmo backoff exponencial
+    usado nos downloads. Erros 4xx propagam na hora -- um 401/403 normalmente
+    indica share_token inválido, que uma nova tentativa não resolve."""
+    ultimo_erro = None
+    for tentativa in range(1, max_tentativas + 1):
+        try:
+            response = sessao.request(metodo, url, **kwargs)
+            response.raise_for_status()
+            return response
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code < 500:
+                raise
+            ultimo_erro = e
+        except requests.exceptions.RequestException as e:
+            ultimo_erro = e
+
+        print(f"⚠️  Falha ({tentativa}/{max_tentativas}) ao consultar {url}: {ultimo_erro}")
+        if tentativa < max_tentativas:
+            time.sleep(min(BACKOFF_TETO_SEGUNDOS, 2 ** tentativa) + random.uniform(0, 1))
+    raise ultimo_erro
+
+
+def descobrir_share_token():
+    """Descobre o token do compartilhamento público vigente seguindo o redirect
+    de https://arquivos.receitafederal.gov.br/ -- é um 302 HTTP simples (sem JS),
+    não precisa de navegador/Playwright para capturar."""
+    response = _requisicao_com_retry("GET", "https://arquivos.receitafederal.gov.br/", timeout=(15, 60))
+    match = re.search(r"/index\.php/s/([A-Za-z0-9]+)", response.url)
+    if not match:
+        raise RuntimeError(f"Não encontrei o share_token na URL final ({response.url}).")
+    return match.group(1)
+
+
+def consulta_base_webdap(share_token=None, base_url="https://arquivos.receitafederal.gov.br/public.php/webdav"):
     """Lista o mês mais recente e os arquivos zip disponíveis via WebDAV, junto com
     o tamanho (getcontentlength) e a etag de cada um -- evita uma requisição GET
     extra por arquivo só para descobrir o tamanho, e permite detectar com segurança
-    se um parcial em disco pertence à versão atual do arquivo remoto.
-    A Receita mudou o layout da página de download em fev/2026; caso o
-    share_token pare de funcionar, será necessário obter um novo em
-    https://arquivos.receitafederal.gov.br/ (pasta Dados>Cadastros>CNPJ)."""
+    se um parcial em disco pertence à versão atual do arquivo remoto."""
+    token = share_token or SHARE_TOKEN or descobrir_share_token()
     DAV_NS = {"d": "DAV:"}  # WebDAV XML namespace
-    url = base_url + "/"
-    response = sessao.request("PROPFIND", url, auth=(share_token, ""), headers={"Depth": "1"}, timeout=(15, 60))
-    response.raise_for_status()
+    url = f"{base_url}/{CAMINHO_PASTA_CNPJ}/"
+    response = _requisicao_com_retry("PROPFIND", url, auth=(token, ""), headers={"Depth": "1"}, timeout=(15, 60))
     root = ElementTree.fromstring(response.content)
 
     directories = []
@@ -71,10 +111,17 @@ def consulta_base_webdap(share_token=SHARE_TOKEN, base_url="https://arquivos.rec
         if match:
             directories.append(match.group(1))
 
+    if not directories:
+        raise RuntimeError(
+            f"Nenhuma pasta YYYY-MM encontrada em {url}. A Receita deve ter mudado "
+            "o layout do compartilhamento de novo -- navegue até "
+            "https://arquivos.receitafederal.gov.br/ , localize a pasta atual do "
+            "CNPJ e atualize CAMINHO_PASTA_CNPJ."
+        )
+
     ultimoAnoMes = directories[-1]
     # obtem lista de arquivos do mês mais recente
-    response = sessao.request("PROPFIND", url + ultimoAnoMes + "/", auth=(share_token, ""), headers={"Depth": "1"}, timeout=(15, 60))
-    response.raise_for_status()
+    response = _requisicao_com_retry("PROPFIND", url + ultimoAnoMes + "/", auth=(token, ""), headers={"Depth": "1"}, timeout=(15, 60))
     root = ElementTree.fromstring(response.content)
 
     files = []
@@ -93,13 +140,14 @@ def consulta_base_webdap(share_token=SHARE_TOKEN, base_url="https://arquivos.rec
         tamanhos[filename] = int(tamanho_el.text) if tamanho_el is not None and tamanho_el.text else None
         etags[filename] = etag_el.text if etag_el is not None else None
 
-    urlBaseArquivosDoMes = f"https://arquivos.receitafederal.gov.br/public.php/dav/files/{share_token}/{ultimoAnoMes}/"
+    urlBaseArquivosDoMes = f"https://arquivos.receitafederal.gov.br/public.php/dav/files/{token}/{CAMINHO_PASTA_CNPJ}/{ultimoAnoMes}/"
     return {
         "anoMes": ultimoAnoMes,
         "urlBaseArquivosDoMes": urlBaseArquivosDoMes,
         "arquivos": files,
         "tamanhos": tamanhos,
         "etags": etags,
+        "shareToken": token,
     }
 
 
@@ -109,11 +157,15 @@ def consulta_base():
         r = consulta_base_webdap()
         print("Consulta por webdap")
         return r
-    except Exception as e:
-        print(f"⚠️  Erro ao consultar a lista de arquivos via webdap: {e}")
+    except requests.exceptions.HTTPError as e:
+        # 401/403 tipicamente indica share_token inválido/expirado -- retentar não ajuda.
+        print(f"⚠️  Erro de autorização ao consultar a lista de arquivos via webdap: {e}")
         print("Navegue até https://arquivos.receitafederal.gov.br/ e localize a pasta Dados>Cadastros>CNPJ")
         print("A url da página conterá um código (share_token) após .../index.php/s/")
-        print("Copie o código e atualize o parâmetro share_token de consulta_base_webdap.")
+        print("Copie o código e informe manualmente em SHARE_TOKEN, se a auto-descoberta não bastar.")
+        return None
+    except Exception as e:
+        print(f"⚠️  Erro ao consultar a lista de arquivos via webdap (após até {max_tentativas} tentativas): {e}")
         return None
 
 
@@ -277,7 +329,7 @@ def main():
             {
                 "anoMes": ultima_referencia,
                 "urlBaseArquivosDoMes": urlBaseArquivosDoMes,
-                "urlPaginaDownloadMeses": f"https://arquivos.receitafederal.gov.br/index.php/s/{SHARE_TOKEN}",
+                "urlPaginaDownloadMeses": f"https://arquivos.receitafederal.gov.br/index.php/s/{parametrosSite['shareToken']}",
             },
             f,
         )

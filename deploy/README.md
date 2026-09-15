@@ -54,28 +54,8 @@ sudo apt install git
 # dependencias
 sudo apt install -y curl gnupg ca-certificates software-properties-common apt-transport-https
 
-# chave GPG
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-
-# repo do docker
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-# instala docker engine
-sudo apt update
-sudo apt install -y docker-ce docker-ce-cli containerd.io
-
-# adiciona usuario ao grupo docker
-sudo usermod -aG docker $USER
-newgrp docker  # Atualiza as permissões sem precisar relogar
-
-# baixa e instala docker-compose
-sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-
-# permissão de execução
-sudo chmod +x /usr/local/bin/docker-compose
-
-# teste de instalação
-docker-compose --version
+# instalar docker
+https://github.com/inova-dtip-pcrs/instalador-docker
 
 #habilitar inicialização automática
 sudo systemctl enable docker.service

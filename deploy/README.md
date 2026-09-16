@@ -167,24 +167,28 @@ exibe_mensagem_advertencia = 0
 
 Depois de gerar uma base nova, basta reiniciar o container `app` (`cd ~/rede-cnpj/deploy && docker-compose restart app`) — como `rede/bases` é montada como volume (veja `docker-compose.yaml`), não é necessário reconstruir a imagem. Mudança de **código** (`git pull` com commits na pasta `rede/`) exige `docker-compose up --build`.
 
-### Atualização automática mensal (cron)
+### Atualização automática diária (cron)
 
-Em vez de repetir os passos manuais acima a cada mês, `rede_cria_tabelas/atualiza_base.py` automatiza todo o processo: baixa os zips, gera as 4 bases numa pasta de staging, valida cada uma (tamanho mínimo e contagem de linhas numa tabela-chave) e só então troca os arquivos em `rede/bases` de forma atômica, reiniciando o container. Se qualquer etapa falhar, a base em produção não é alterada (ou é restaurada a partir do backup, se a falha ocorrer durante a própria troca). Ele também mantém `rede/rede.ini` em dia: limpa `referencia_bd` e `exibe_mensagem_advertencia` (o rótulo/aviso de base de teste) e sincroniza a seção `[RFB]` com o mês mais recente disponível na Receita — os ajustes manuais de `rede.ini` do passo anterior não precisam ser repetidos.
+Em vez de repetir os passos manuais acima a cada mês, `rede_cria_tabelas/atualiza_base.py` automatiza todo o processo — pensado para rodar via cron **todo dia**, não só uma vez por mês: a cada execução, primeiro consulta (PROPFIND, bem barato) qual é a referência (`anoMes`) mais recente disponível na Receita e compara com a que já está em produção (`rede/rede.ini`). Se for a mesma, o script só loga isso e termina sem fazer nada. Se for uma referência nova, baixa os zips, gera as 4 bases numa pasta de staging, valida cada uma (tamanho mínimo e contagem de linhas numa tabela-chave) e só então troca os arquivos em `rede/bases` de forma atômica, reiniciando o container.
 
-Exige pelo menos ~70GB livres no início (o conjunto novo de bases fica perto do tamanho do atual, mais a folga para os zips/csvs temporários da etapa de geração do cnpj.db) — o script aborta antes de começar se não houver espaço suficiente.
+A Receita normalmente publica a base do mês perto do **2º domingo**, mas às vezes atrasa (já aconteceu de atrasar 1-3 semanas) — por isso um cron diário funciona melhor do que fixar um dia do mês: a base nova é detectada e processada no dia seguinte à publicação, seja lá quando ela ocorrer, sem precisar reajustar o cron a cada vez que a Receita mudar a cadência.
+
+Se a execução for interrompida (queda de rede, falha do servidor da Receita, reinício da máquina etc.) antes de terminar, a próxima chamada do cron **retoma de onde parou** em vez de recomeçar do zero: etapas cujo arquivo de saída já existe e passa a checagem de sanidade são puladas. Se qualquer etapa falhar de verdade (não só "ainda não terminou"), a base em produção não é alterada (ou é restaurada a partir do backup, se a falha ocorrer durante a própria troca). Ele também mantém `rede/rede.ini` em dia: limpa `referencia_bd` e `exibe_mensagem_advertencia` (o rótulo/aviso de base de teste) e sincroniza a seção `[RFB]` com o mês mais recente disponível na Receita — os ajustes manuais de `rede.ini` do passo anterior não precisam ser repetidos.
+
+Nos dias em que há base nova para processar, exige pelo menos ~70GB livres no início (o conjunto novo de bases fica perto do tamanho do atual, mais a folga para os zips/csvs temporários da etapa de geração do cnpj.db) — o script aborta antes de começar se não houver espaço suficiente. Nos demais dias essa checagem nem roda.
 
 ```bash
 # usa o mesmo venv criado na seção anterior
 crontab -e
 ```
 
-Adicione a linha (ajuste os caminhos para o seu servidor; roda todo dia 1 às 3h):
+Adicione a linha (ajuste os caminhos para o seu servidor; roda toda meia-noite — na maioria dos dias só faz a consulta rápida e sai):
 
 ```
-0 3 1 * * $HOME/rede-cnpj/rede_cria_tabelas/.venv/bin/python $HOME/rede-cnpj/rede_cria_tabelas/atualiza_base.py
+0 0 * * * $HOME/rede-cnpj/rede_cria_tabelas/.venv/bin/python $HOME/rede-cnpj/rede_cria_tabelas/atualiza_base.py
 ```
 
-Os logs de cada execução ficam em `rede_cria_tabelas/logs/`. O script resolve o caminho do `docker-compose` sozinho (via `PATH` ou `/usr/local/bin/docker-compose`), já que o `PATH` do cron costuma ser mais restrito que o do shell interativo.
+Os logs de cada execução ficam em `rede_cria_tabelas/logs/` (um arquivo por dia; nos dias sem base nova o log tem só uma ou duas linhas). O script resolve o caminho do `docker-compose` sozinho (via `PATH` ou `/usr/local/bin/docker-compose`), já que o `PATH` do cron costuma ser mais restrito que o do shell interativo.
 
 #### Monitoramento de erros (Sentry)
 
@@ -192,7 +196,7 @@ Os logs de cada execução ficam em `rede_cria_tabelas/logs/`. O script resolve 
 
 ```
 SENTRY_DSN=https://sua-chave@seu-host-sentry/id-do-projeto
-0 3 1 * * $HOME/rede-cnpj/rede_cria_tabelas/.venv/bin/python $HOME/rede-cnpj/rede_cria_tabelas/atualiza_base.py
+0 0 * * * $HOME/rede-cnpj/rede_cria_tabelas/.venv/bin/python $HOME/rede-cnpj/rede_cria_tabelas/atualiza_base.py
 ```
 
 Sem `SENTRY_DSN` definido, o script segue funcionando normalmente — só fica sem alerta remoto em caso de falha (o log em `rede_cria_tabelas/logs/` continua sendo a fonte primária). Opcional: `SENTRY_ENVIRONMENT` (padrão `production`).
@@ -214,11 +218,11 @@ Requires=docker.service
 After=docker.service
 
 [Service]
-WorkingDirectory=/home/regis/rede-cnpj/deploy
+WorkingDirectory=/home/inovacao/rede-cnpj/deploy
 ExecStart=/usr/local/bin/docker-compose up
 ExecStop=/usr/local/bin/docker-compose down
 Restart=always
-User=regis
+User=inovacao
 
 [Install]
 WantedBy=multi-user.target

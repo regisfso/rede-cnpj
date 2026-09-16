@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Orquestra a atualização mensal da base pública de CNPJ para rodar sem intervenção
-manual (ex.: via cron): baixa os arquivos da Receita, gera cnpj.db, rede.db,
-rede_search.db e cnpj_links_ete.db, valida cada um e só então troca os arquivos em
-produção (rede/bases) de forma atômica, reiniciando o container da aplicação.
+Orquestra a atualização da base pública de CNPJ para rodar sem intervenção manual
+via cron DIÁRIO: consulta a referência (anoMes) mais recente disponível na Receita
+e, só se for diferente da que já está em produção, baixa os arquivos, gera cnpj.db,
+rede.db, rede_search.db e cnpj_links_ete.db, valida cada um e então troca os
+arquivos em produção (rede/bases) de forma atômica, reiniciando o container da
+aplicação. Nos demais dias (a Receita normalmente publica só uma vez por mês, perto
+do 2º domingo, mas às vezes atrasa semanas) o script sai sem fazer nada.
+
+Se a execução for interrompida (falha de rede, queda do servidor etc.) antes de
+terminar, a próxima chamada retoma de onde parou em vez de recomeçar do zero --
+etapas cujo arquivo de saída já existe e passa a checagem de sanidade são puladas
+(ver saida_pronta/descarta_saida_invalida e seu uso em executa_pipeline).
 
 Se qualquer etapa falhar, a base em produção não é tocada (ou é restaurada a partir
 do backup, se a falha ocorrer durante a própria troca) e o processo termina com
@@ -15,8 +23,10 @@ Uso: python atualiza_base.py
 Pasta de trabalho: os scripts chamados usam caminhos relativos (dados-publicos,
 dados-publicos-zip), por isso este script sempre roda com cwd = sua própria pasta.
 """
+import contextlib
 import fcntl
 import glob
+import io
 import json
 import logging
 import os
@@ -29,6 +39,11 @@ import time
 
 import sentry_sdk
 from sentry_sdk.integrations.logging import LoggingIntegration
+
+# mesma pasta de atualiza_base.py (SCRIPT_DIR entra em sys.path automaticamente por
+# ser a pasta do script principal) -- reaproveita a consulta ao WebDAV da Receita em
+# vez de duplicá-la, e permite decidir se há base nova ANTES de gastar tempo/disco.
+from dados_cnpj_baixa_resiliente import consulta_base
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # rede_cria_tabelas/
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)  # rede-cnpj/
@@ -281,16 +296,103 @@ def verifica_rede_ini():
         raise PipelineError(f"{REDE_INI} não existe ou não é gravável.")
 
 
-def le_metadados_rfb():
-    """Lê o anoMes/urls que dados_cnpj_baixa_resiliente.py descobriu junto ao WebDAV
-    da Receita, para replicar em rede.ini -- evita consultar o site de novo."""
-    if not os.path.exists(METADADOS_RFB_PATH):
+def verifica_secao_rfb():
+    """As chaves anoMes/urlBaseArquivosDoMes/urlPaginaDownloadMeses da seção [RFB]
+    precisam já existir em rede.ini (mesmo vazias) -- atualiza_ini_valor() só
+    substitui o valor de uma chave já existente, e essa chamada (atualiza_rede_ini)
+    só acontece DEPOIS da troca dos arquivos em produção e do restart do container.
+    Descobrir a falta de uma chave só nesse ponto seria o peor momento possível;
+    melhor falhar aqui, antes de tocar em qualquer coisa. Se faltar, o rede.ini de
+    produção provavelmente foi criado antes desta seção existir -- adicione manualmente:
+        [RFB]
+        anoMes=
+        urlBaseArquivosDoMes=
+        urlPaginaDownloadMeses=
+    """
+    with open(REDE_INI, encoding="utf-8") as f:
+        conteudo = f.read()
+    m = re.search(r"^\[RFB\]\s*$(.*?)(?=^\[|\Z)", conteudo, re.MULTILINE | re.DOTALL)
+    corpo_rfb = m.group(1) if m else ""
+    faltando = [
+        chave
+        for chave in ("anoMes", "urlBaseArquivosDoMes", "urlPaginaDownloadMeses")
+        if not re.search(rf"^\s*{chave}\s*=", corpo_rfb, re.MULTILINE)
+    ]
+    if faltando:
         raise PipelineError(
-            f"Metadados do download não encontrados em {METADADOS_RFB_PATH} "
-            "(dados_cnpj_baixa_resiliente.py não gravou o arquivo esperado)."
+            f"Seção [RFB] de {REDE_INI} não tem a(s) chave(s) {', '.join(faltando)}. "
+            "Adicione manualmente antes de habilitar o cron diário (ver verifica_secao_rfb() em atualiza_base.py)."
         )
-    with open(METADADOS_RFB_PATH, encoding="utf-8") as f:
-        return json.load(f)
+
+
+def le_anoMes_producao():
+    """anoMes atualmente publicado em produção, lido de rede.ini (seção [RFB]).
+    None se ainda não houver nenhuma referência gravada (ex.: primeira execução)."""
+    with open(REDE_INI, encoding="utf-8") as f:
+        for linha in f:
+            m = re.match(r"\s*anoMes\s*=\s*(\S+)", linha)
+            if m:
+                return m.group(1)
+    return None
+
+
+def le_anoMes_tentativa_anterior():
+    """anoMes que uma execução anterior, incompleta, estava processando -- gravado
+    por dados_cnpj_baixa_resiliente.py assim que descobre o mês (mesmo que o
+    download não termine). Usado para decidir se dá para retomar o staging de uma
+    tentativa anterior ou se ele pertence a um mês diferente e deve ser descartado."""
+    if not os.path.exists(METADADOS_RFB_PATH):
+        return None
+    try:
+        with open(METADADOS_RFB_PATH, encoding="utf-8") as f:
+            return json.load(f).get("anoMes")
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def saida_pronta(caminho, tamanho_minimo, tabela, linhas_minimas):
+    """True se `caminho` já existe e passa a checagem de sanidade -- etapa já
+    concluída por uma tentativa anterior, pode ser pulada. Nunca apaga o arquivo
+    quando a checagem falha: para cnpj.db isso destruiria o progresso interno (tabela
+    _progresso) que dados_cnpj_para_sqlite_progresso.py usa para retomar sozinho."""
+    if not os.path.exists(caminho):
+        return False
+    try:
+        checa_sanidade(caminho, tamanho_minimo, tabela, linhas_minimas)
+        return True
+    except PipelineError:
+        return False
+
+
+def descarta_saida_invalida(caminho, tamanho_minimo, tabela, linhas_minimas):
+    """Como saida_pronta, mas apaga o arquivo quando a checagem falha. Usado para
+    saídas cujo script gerador NÃO tem retomada própria e trata a mera existência do
+    arquivo como 'já terminei' (ex.: rede_cria_tabela_rede.db.py sai com sucesso sem
+    fazer nada se rede.db ou rede_search.db já existir, válido ou não) -- sem apagar,
+    uma saída parcial de uma execução interrompida travaria toda tentativa futura."""
+    if not os.path.exists(caminho):
+        return False
+    try:
+        checa_sanidade(caminho, tamanho_minimo, tabela, linhas_minimas)
+        return True
+    except PipelineError as e:
+        logger.warning("%s existe mas falhou na sanidade (%s); removendo para regerar.", caminho, e)
+        os.remove(caminho)
+        return False
+
+
+def metadados_rfb_de(parametros_site):
+    """Monta o mesmo formato que dados_cnpj_baixa_resiliente.py grava em
+    _ultima_referencia_rfb.json, a partir da consulta ao WebDAV que executa_pipeline
+    já fez no início desta execução -- em vez de reler o JSON em disco, que numa
+    retomada seria o de uma tentativa anterior e poderia ter um share_token já
+    trocado pela Receita (ver comentário sobre SHARE_TOKEN em
+    dados_cnpj_baixa_resiliente.py)."""
+    return {
+        "anoMes": parametros_site["anoMes"],
+        "urlBaseArquivosDoMes": parametros_site["urlBaseArquivosDoMes"],
+        "urlPaginaDownloadMeses": f"https://arquivos.receitafederal.gov.br/index.php/s/{parametros_site['shareToken']}",
+    }
 
 
 def atualiza_ini_valor(caminho_ini, secao, chave, valor):
@@ -343,28 +445,81 @@ def reinicia_app():
     logger.info("Container reiniciado com sucesso.")
 
 
+def consulta_base_logada():
+    """Chama consulta_base() capturando os print()s de aviso/retry que ela e
+    _requisicao_com_retry emitem: rodando via subprocess (roda_etapa) essa saída
+    seria repassada linha a linha para o logger, mas aqui chamamos a função direto
+    (fica bem mais barato que abrir um subprocesso todo dia só para descobrir o
+    anoMes) -- sem isso, a única pista de por que a consulta falhou iria para o
+    stdout que o cron captura, nunca para logs/."""
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        resultado = consulta_base()
+    for linha in buffer.getvalue().splitlines():
+        logger.info("[consulta webdav] %s", linha)
+    return resultado
+
+
 def executa_pipeline():
     verifica_docker_compose()
     verifica_rede_ini()
+    verifica_secao_rfb()
+
+    anoMes_producao = le_anoMes_producao()
+    parametros_site = consulta_base_logada()
+    if not parametros_site:
+        logger.warning("Não foi possível consultar a lista de arquivos da Receita hoje. Tentando de novo no próximo cron.")
+        return
+    anoMes_disponivel = parametros_site["anoMes"]
+
+    # comparação lexicográfica == cronológica para YYYY-MM com zero-padding. Usar
+    # ">" (não "!=") é deliberado: se o WebDAV alguma hora devolver algo fora de
+    # ordem (ou uma pasta antiga reaparecer temporariamente), isso nunca deve
+    # disparar um redeploy que sobrescreva produção com uma referência mais antiga.
+    if anoMes_producao is not None and anoMes_disponivel <= anoMes_producao:
+        logger.info("Sem base nova (produção já está em %s). Nada a fazer.", anoMes_producao)
+        return
+
     verifica_espaco_livre(REPO_ROOT, MIN_FREE_GB_START)
-    limpa_staging()
 
-    roda_etapa("download dos zips", "dados_cnpj_baixa_resiliente.py", entrada_stdin="\n")
-    verifica_zips_completos()
-    metadados_rfb = le_metadados_rfb()
+    if le_anoMes_tentativa_anterior() == anoMes_disponivel:
+        logger.info("Retomando tentativa anterior (incompleta) para a referência %s.", anoMes_disponivel)
+    else:
+        logger.info("Nova referência disponível: %s (produção atual: %s).", anoMes_disponivel, anoMes_producao)
+        limpa_staging()
 
-    roda_etapa("geração do cnpj.db", "dados_cnpj_para_sqlite_progresso.py", entrada_stdin="")
-    checa_sanidade(os.path.join(STAGING_DIR, "cnpj.db"), *ARQUIVOS_FINAIS["cnpj.db"])
+    cnpj_db_path = os.path.join(STAGING_DIR, "cnpj.db")
+    if not saida_pronta(cnpj_db_path, *ARQUIVOS_FINAIS["cnpj.db"]):
+        roda_etapa("download dos zips", "dados_cnpj_baixa_resiliente.py", entrada_stdin="\n")
+        verifica_zips_completos()
+        roda_etapa("geração do cnpj.db", "dados_cnpj_para_sqlite_progresso.py", entrada_stdin="")
+        checa_sanidade(cnpj_db_path, *ARQUIVOS_FINAIS["cnpj.db"])
+
+    metadados_rfb = metadados_rfb_de(parametros_site)
 
     logger.info("Removendo zips já processados para liberar espaço...")
     shutil.rmtree(ZIP_DIR, ignore_errors=True)
 
-    roda_etapa("geração do rede.db / rede_search.db", "rede_cria_tabela_rede.db.py", entrada_stdin="y\n\n")
-    checa_sanidade(os.path.join(STAGING_DIR, "rede.db"), *ARQUIVOS_FINAIS["rede.db"])
-    checa_sanidade(os.path.join(STAGING_DIR, "rede_search.db"), *ARQUIVOS_FINAIS["rede_search.db"])
+    rede_db_path = os.path.join(STAGING_DIR, "rede.db")
+    rede_search_path = os.path.join(STAGING_DIR, "rede_search.db")
+    # avaliar os dois lados sem 'and' de curto-circuito: se um for inválido, o outro
+    # também precisa ser apagado (rede_cria_tabela_rede.db.py sai com sucesso sem
+    # gerar nada se QUALQUER um dos dois já existir, então os dois têm que estar
+    # ausentes para ele realmente regerar).
+    rede_db_ok = descarta_saida_invalida(rede_db_path, *ARQUIVOS_FINAIS["rede.db"])
+    rede_search_ok = descarta_saida_invalida(rede_search_path, *ARQUIVOS_FINAIS["rede_search.db"])
+    if not (rede_db_ok and rede_search_ok):
+        for caminho in (rede_db_path, rede_search_path):
+            if os.path.exists(caminho):
+                os.remove(caminho)
+        roda_etapa("geração do rede.db / rede_search.db", "rede_cria_tabela_rede.db.py", entrada_stdin="y\n\n")
+        checa_sanidade(rede_db_path, *ARQUIVOS_FINAIS["rede.db"])
+        checa_sanidade(rede_search_path, *ARQUIVOS_FINAIS["rede_search.db"])
 
-    roda_etapa("geração do cnpj_links_ete.db", "rede_cria_tabela_cnpj_links_ete.py", entrada_stdin="y\n\n")
-    checa_sanidade(os.path.join(STAGING_DIR, "cnpj_links_ete.db"), *ARQUIVOS_FINAIS["cnpj_links_ete.db"])
+    links_ete_path = os.path.join(STAGING_DIR, "cnpj_links_ete.db")
+    if not descarta_saida_invalida(links_ete_path, *ARQUIVOS_FINAIS["cnpj_links_ete.db"]):
+        roda_etapa("geração do cnpj_links_ete.db", "rede_cria_tabela_cnpj_links_ete.py", entrada_stdin="y\n\n")
+        checa_sanidade(links_ete_path, *ARQUIVOS_FINAIS["cnpj_links_ete.db"])
 
     logger.info("Todas as bases novas passaram na checagem de sanidade. Trocando em produção...")
     try:

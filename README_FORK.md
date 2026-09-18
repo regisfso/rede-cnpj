@@ -66,6 +66,35 @@ As rotas de busca (`/busca/...`) retornam apenas os ids encontrados
 completos desses ids, já que essa separação é a mesma usada internamente
 pelas telas da própria RedeCNPJ.
 
+### Limite de resultados (parâmetro `limite`)
+
+Nas rotas de busca, `limite` é enviado como parâmetro de query string na
+própria URL do GET (não existe em `/dados`, que não tem esse parâmetro):
+
+```bash
+curl "http://localhost/rede/api/ext/busca/nome?q=BANCO%20DO%20BRASIL&limite=50"
+
+curl "http://localhost/rede/api/ext/busca/cnpj_raiz/00000000?limite=150"
+
+curl "http://localhost/rede/api/ext/busca/cpf/123456789?limite=30"
+```
+
+O `limite` enviado pelo cliente é só um teto sugerido: o valor efetivamente
+usado na consulta é sempre `min(limite_pedido, teto_do_servidor)`, e o teto é
+fixo no código (não é configurável via `rede.ini`). Se `limite` vier omitido
+ou como `0`, cai no padrão de 10.
+
+| Rota | Teto do servidor | Onde está no código |
+|---|---|---|
+| `/busca/nome` | 100 | `rede_sqlite_cnpj.buscaPorNome` |
+| `/busca/cnpj_raiz/<cnpj_basico>` | 200 | `rede_sqlite_cnpj.busca_cnpj` |
+| `/busca/cpf/<cpf_parcial>` | 100 | `rede_sqlite_cnpj.busca_cpf` |
+| `/dados` | **sem limite** — processa todos os `ids` enviados | `rede_sqlite_cnpj.jsonDados` |
+
+Como `/dados` não limita a quantidade de `ids` por requisição, o único freio
+para um payload muito grande nessa rota hoje é o rate limit de requisições
+(`limiter_dados`, abaixo) — não há cap de tamanho de lista.
+
 ### Exemplos
 
 ```bash

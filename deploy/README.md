@@ -22,6 +22,7 @@ rede-cnpj/                     # este repositório
 │   ├── Dockerfile
 │   ├── wsgi.py
 │   ├── docker-compose.yaml
+│   ├── atualiza_producao.sh   # atualização de código em produção (git pull + rebuild, com health gate/rollback)
 │   ├── nginx/
 │   │   ├── nginx.conf
 │   │   ├── gerar_certificado_autoassinado.sh
@@ -166,6 +167,18 @@ exibe_mensagem_advertencia = 0
 ```
 
 Depois de gerar uma base nova, basta reiniciar o container `app` (`cd ~/rede-cnpj/deploy && docker-compose restart app`) — como `rede/bases` é montada como volume (veja `docker-compose.yaml`), não é necessário reconstruir a imagem. Mudança de **código** (`git pull` com commits na pasta `rede/`) exige `docker-compose up --build`.
+
+### Atualização de código em produção (`atualiza_producao.sh`)
+
+Em vez de rodar manualmente `git pull` + `docker-compose up --build`, use `deploy/atualiza_producao.sh`:
+
+```bash
+cd ~/rede-cnpj/deploy
+./atualiza_producao.sh              # interativo, pergunta em cada etapa
+./atualiza_producao.sh --rapido     # sem prompts, para automação (ex. chamado por outro script)
+```
+
+Ele confere conectividade e autenticação com o GitHub, compara o commit local com `origin/master` (encerra sem fazer nada se já estiver atualizado), avisa se houver alterações locais não commitadas antes do `git pull`, e então reconstrói e troca o container `app`. A troca tem **health gate com rollback automático**: se o container novo não responder dentro de 60s, o script volta sozinho para a imagem anterior (e reverte o workspace git para o commit correspondente). Se `rede-cnpj.service` (ver seção de systemd abaixo) estiver ativo, a troca usa `sudo systemctl restart rede-cnpj.service` em vez de mexer no container diretamente — exige uma regra sudoers NOPASSWD para esse comando (senão o script trava pedindo senha no modo `--rapido`). Só atualiza código — a atualização das bases de CNPJ continua por conta do `atualiza_base.py` (próxima seção).
 
 ### Atualização automática diária (cron)
 

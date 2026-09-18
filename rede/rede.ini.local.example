@@ -1,0 +1,42 @@
+# Copie este arquivo para rede.ini.local (mesma pasta) e ajuste os valores
+# deste ambiente. rede.ini.local NÃO é versionado (está no .gitignore) --
+# rede_config.py o lê por último, sobrepondo rede.ini. Ver deploy/README.md,
+# seção "Configuração específica de ambiente (rede.ini.local)".
+#
+#   cp rede.ini.local.example rede.ini.local
+
+[LOGIN]
+email=seu-email-de-contato@dominio
+
+[BASE]
+# mantido por rede_cria_tabelas/atualiza_base.py -- deixe vazio
+referencia_bd=
+
+[INICIO]
+# lida com configparser.getboolean(), que dá erro em string vazia -- por isso
+# precisa de um valor booleano válido (0 ou 1) desde o início, diferente das
+# demais chaves deste arquivo. Mantida por atualiza_base.py.
+exibe_mensagem_advertencia=0
+# quem realmente liga/desliga o aviso de "base de teste" (alerta de abertura
+# da página E tooltip do botão "RedeCNPJ") é mensagem_advertencia estar vazia
+# ou não -- rede.py lê esse texto direto, sem checar exibe_mensagem_advertencia
+# em lugar nenhum do fluxo web.
+mensagem_advertencia=
+
+[API]
+# api_keys é usada tanto pela API original (rede.py) quanto pelos endpoints
+# /api/ext/... deste fork -- lista de chaves válidas separadas por vírgula.
+# É segredo, não deve ficar no rede.ini rastreado.
+api_keys=
+
+# deste fork, controla os endpoints /api/ext/...
+api_ext_busca=1
+api_ext_dados=1
+api_ext_requer_chave=0
+
+[RFB]
+# mantidas por rede_cria_tabelas/atualiza_base.py -- precisam existir mesmo
+# vazias (atualiza_ini_valor() só substitui chave já existente, nunca cria)
+anoMes=
+urlBaseArquivosDoMes=
+urlPaginaDownloadMeses=

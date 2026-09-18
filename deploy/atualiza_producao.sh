@@ -145,6 +145,33 @@ resolve_docker_compose() {
     command -v docker-compose 2>/dev/null || echo /usr/local/bin/docker-compose
 }
 
+# rede/rede.ini.local precisa existir como ARQUIVO comum antes do
+# docker-compose up: é montado como bind mount (docker-compose.yaml), e um
+# bind mount de arquivo que não existe no host faz o Docker criar um
+# DIRETÓRIO vazio nesse caminho dentro do container -- rede_config.py então
+# quebra com IsADirectoryError (sem tratamento), e isso só apareceria depois
+# do health gate estourar os 60s. Falha aqui, antes de tocar em qualquer
+# coisa, é bem mais claro.
+verifica_rede_ini_local() {
+    local caminho="$APP_DIR/rede/rede.ini.local"
+    if [[ -d "$caminho" ]]; then
+        echo "Erro: $caminho é um DIRETÓRIO, não um arquivo (provavelmente criado"
+        echo "pelo Docker num bind mount anterior sem o arquivo existir). Remova o"
+        echo "diretório e crie o arquivo corretamente:"
+        echo "  rmdir '$caminho'"
+        echo "  cp '$APP_DIR/rede/rede.ini.local.example' '$caminho'"
+        echo "  nano '$caminho'   # ajuste email e mensagem_advertencia"
+        exit 1
+    fi
+    if [[ ! -f "$caminho" ]]; then
+        echo "Erro: $caminho não existe. Crie a partir do exemplo antes de continuar:"
+        echo "  cp '$APP_DIR/rede/rede.ini.local.example' '$caminho'"
+        echo "  nano '$caminho'   # ajuste email e mensagem_advertencia"
+        echo "Ver deploy/README.md, seção 'Configuração específica de ambiente'."
+        exit 1
+    fi
+}
+
 # Espera até HEALTH_TIMEOUT segundos o container "app" responder a uma
 # requisição HTTP real. Roda DENTRO do container via python -c/urllib (a
 # imagem python:3.13-slim não tem curl instalado). Sem endpoint /health
@@ -304,6 +331,8 @@ if [[ $? -ne 0 ]]; then
     echo "Erro: git pull falhou. O script será interrompido."
     exit 1
 fi
+
+verifica_rede_ini_local
 
 etapa "2/2 - Rebuild e troca do container (health gate + rollback automático)"
 cd "$COMPOSE_DIR" || { echo "Erro: Não foi possível acessar $COMPOSE_DIR"; exit 1; }

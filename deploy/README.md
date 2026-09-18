@@ -114,39 +114,35 @@ Se quiser trocar o certificado depois (autoassinado por um real, ou gerar outro 
 produção -- qualquer alteração local nele volta a causar o mesmo conflito de
 `git pull` que já aconteceu antes (um commit que toque em `rede.ini` sempre vai
 colidir com uma cópia que diverge do git, `skip-worktree` ou não). Em vez
-disso, valores específicos deste ambiente (e-mail de contato, e as chaves que
-`atualiza_base.py` mantém sozinho: `referencia_bd`, `exibe_mensagem_advertencia`
-e a seção `[RFB]`) vão em `rede/rede.ini.local`, um arquivo **não versionado**
-(está no `.gitignore`) que `rede_config.py` lê por último, sobrepondo o
-`rede.ini` padrão.
+disso, valores específicos deste ambiente (e-mail de contato, segredos como
+`api_keys`, chaves que `atualiza_base.py` mantém sozinho como `referencia_bd`
+e `[RFB]`, e as chaves `api_ext_*` deste fork) vão em `rede/rede.ini.local`,
+um arquivo **não versionado** (está no `.gitignore`) que `rede_config.py` lê
+por último, sobrepondo o `rede.ini` padrão.
 
-Crie-o **antes do primeiro `docker-compose up`** (um bind mount de arquivo que
-não existe no host faz o Docker criar um diretório vazio nesse caminho dentro
-do container):
+Crie-o a partir do exemplo rastreado, **antes do primeiro `docker-compose
+up`** (um bind mount de arquivo que não existe no host faz o Docker criar um
+diretório vazio nesse caminho dentro do container):
 
 ```bash
-cat > ~/rede-cnpj/rede/rede.ini.local <<'EOF'
-[LOGIN]
-email=seu-email-de-contato@dominio
-
-[BASE]
-referencia_bd=
-
-[INICIO]
-exibe_mensagem_advertencia=
-
-[RFB]
-anoMes=
-urlBaseArquivosDoMes=
-urlPaginaDownloadMeses=
-EOF
+cp ~/rede-cnpj/rede/rede.ini.local.example ~/rede-cnpj/rede/rede.ini.local
+nano ~/rede-cnpj/rede/rede.ini.local   # ajuste email e mensagem_advertencia
 ```
 
-As chaves de `[RFB]` precisam existir mesmo vazias -- `atualiza_ini_valor()` (em
-`atualiza_base.py`) só substitui o valor de uma chave já existente, nunca cria
-uma nova; `verifica_secao_rfb()` falha alto e claro no início do cron se
-faltar alguma, em vez de deixar para descobrir só depois da troca das bases em
-produção.
+`rede/rede.ini.local.example` documenta cada chave (por que existe, quem a
+mantém, o que quebra se faltar) -- inclusive a pegadinha de
+`exibe_mensagem_advertencia` (lida com `configparser.getboolean()`, dá erro em
+string vazia) e o fato de que é `mensagem_advertencia` vazio, não
+`exibe_mensagem_advertencia`, quem realmente desliga o aviso de "base de
+teste" (tanto no alerta de abertura da página quanto no tooltip do botão
+"RedeCNPJ") -- `rede.py` lê esse texto direto, sem checar
+`exibe_mensagem_advertencia` em lugar nenhum do fluxo web.
+
+As chaves `api_ext_*` (endpoints `/api/ext/...` deste fork) e `api_keys`
+(segredo, chaves válidas separadas por vírgula) não existem mais em
+`rede.ini` -- se `rede.ini.local` não tiver essas chaves, os endpoints
+`/api/ext/...` ficam desativados (`getboolean` cai no `False` padrão) em vez
+de dar erro.
 
 ---
 

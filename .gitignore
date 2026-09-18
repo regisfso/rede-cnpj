@@ -4,3 +4,11 @@
 # certificados HTTPS (auto-assinados ou reais): gerados/colocados localmente, nunca versionados
 deploy/nginx/certs/*
 !deploy/nginx/certs/.gitkeep
+
+# atualiza_base.py: zips baixados da Receita e staging de extração/geração dos .db
+# (arquivos de instrução .txt continuam versionados)
+rede_cria_tabelas/dados-publicos-zip/*
+!rede_cria_tabelas/dados-publicos-zip/*.txt
+rede_cria_tabelas/dados-publicos/*
+!rede_cria_tabelas/dados-publicos/*.txt
+rede_cria_tabelas/logs/

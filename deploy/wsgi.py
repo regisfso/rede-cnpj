@@ -41,12 +41,24 @@ def load_app(script_path: str, app_var: str = "app") -> object:
         # Configuração adicional para o Flask
         flask_app.config.update({"INSTANCE_PATH": str(Path(__file__).parent)})
 
+        # Registra extensões do fork (blueprints etc.) ainda dentro do try,
+        # enquanto sys.path/cwd/argv isolados por configure_app_paths() seguem em vigor.
+        registrar_extensoes(flask_app, module)
+
         return flask_app
     finally:
         # Restauração do ambiente
         sys.argv = original_argv
         sys.path = original_path
         os.chdir(original_cwd)
+
+
+def registrar_extensoes(flask_app, rede_mod):
+    """Registra blueprints adicionais deste fork, sem tocar em rede/rede.py."""
+    from modulos.api_ext.rede_api_ext import criar_blueprint
+
+    bp = criar_blueprint(rede_mod)
+    flask_app.register_blueprint(bp, url_prefix=rede_mod.base + 'api/ext')
 
 
 # Carrega a aplicação

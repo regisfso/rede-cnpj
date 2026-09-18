@@ -1,15 +1,7 @@
 # RedeCNPJ - Visualização de dados públicos de CNPJ
 
 > ### 🔧 Sobre este fork
-> Este repositório é um fork de [rictom/rede-cnpj](https://github.com/rictom/rede-cnpj), mantido sincronizado com o projeto original. As mudanças abaixo não existem no projeto original:
->
-> - **`dados_cnpj_para_sqlite.py`**: uso de memória RAM reduzido — os CSVs grandes são lidos em blocos com `dask` (`blocksize=128MB`) e processados partição a partição, com `gc.collect()` liberando a memória a cada etapa, em vez de carregar o arquivo inteiro de uma vez; a ordem de carga das tabelas foi ajustada (estabelecimento primeiro) para reduzir o pico de uso de RAM.
-> - **`dados_cnpj_baixa_resiliente.py`** *(novo)*: alternativa ao `dados_cnpj_baixa.py` com download concorrente de vários arquivos ao mesmo tempo, retomada automática de downloads incompletos, validação de integridade dos zips baixados e contador de quantos arquivos ainda faltam.
-> - **`dados_cnpj_para_sqlite_progresso.py`** *(novo)*: alternativa ao `dados_cnpj_para_sqlite.py` que grava o progresso em uma tabela de controle dentro do próprio banco sqlite, permitindo retomar a geração da base do ponto onde parou (sem refazer o que já foi concluído) caso o processo seja interrompido.
-> - `requirements.txt` (em `rede_cria_tabelas`): adicionadas as dependências `pyarrow`, `psutil` e `tqdm` usadas pelos scripts acima.
-> - **`deploy/`** *(novo)*: Dockerfile, docker-compose e configuração de nginx para rodar esta instalação em produção com Docker. Veja [`deploy/README.md`](deploy/README.md).
->
-> As demais alterações no repositório vêm do projeto original.
+> Este repositório é um fork de [rictom/rede-cnpj](https://github.com/rictom/rede-cnpj), mantido sincronizado com o projeto original. Para a lista de mudanças deste fork (scripts de carga, deploy Docker, API de consulta, etc.), veja [`README_FORK.md`](README_FORK.md).
 
 Ferramenta para observar de forma gráfica os relacionamentos entre empresas e sócios, a partir dos dados públicos disponibilizados pela [Receita Federal](https://dados.gov.br/dados/conjuntos-dados/cadastro-nacional-da-pessoa-juridica---cnpj). Os scripts possibilitam baixar os dados públicos, gerar o banco de dados local em sqlite e abrir o aplicativo que faz a visualização no navegador. <b>O código não foi feito por IA!!!</b><br>
 <br><br>

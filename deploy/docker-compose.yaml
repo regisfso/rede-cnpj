@@ -8,9 +8,14 @@ services:
       - FLASK_ENV=production
     volumes:
       # o código (rede.py, wsgi.py, templates, etc.) já vai embutido na imagem (veja Dockerfile).
-      # só as bases sqlite e o rede.ini são montados, para atualizar sem rebuild.
+      # bases sqlite, rede.ini e o override de ambiente rede.ini.local são montados,
+      # para atualizar sem rebuild.
+      # rede.ini.local precisa existir no host ANTES do primeiro `docker-compose up`
+      # (ver deploy/README.md) -- montar um arquivo que não existe no host faz o
+      # Docker criar um DIRETÓRIO nesse caminho dentro do container.
       - ../rede/bases:/rede-cnpj/rede/bases
       - ../rede/rede.ini:/rede-cnpj/rede/rede.ini
+      - ../rede/rede.ini.local:/rede-cnpj/rede/rede.ini.local
     working_dir: /rede-cnpj/rede
     expose:
       - "8000"

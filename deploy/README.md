@@ -2,7 +2,7 @@
 
 Conteineriza com Docker a instalação de produção deste fork do rede-cnpj (rictom/rede-cnpj).
 
-O código da aplicação (incluindo o `wsgi.py`) é incorporado à imagem no build. Só a pasta `rede/bases` (bases sqlite) e o `rede/rede.ini` são montados como volume, para poderem ser atualizados sem reconstruir a imagem.
+O código da aplicação (incluindo o `wsgi.py`) é incorporado à imagem no build. Só a pasta `rede/bases` (bases sqlite), o `rede/rede.ini` e o override de ambiente `rede/rede.ini.local` (ver seção "Configuração específica de ambiente" abaixo) são montados como volume, para poderem ser atualizados sem reconstruir a imagem.
 
 Ou seja: depois de um `git pull` com mudança de código, rode `docker-compose up --build`; depois de gerar uma base nova (veja abaixo), basta `docker-compose restart app`.
 
@@ -108,6 +108,48 @@ Se quiser trocar o certificado depois (autoassinado por um real, ou gerar outro 
 
 ---
 
+### Configuração específica de ambiente (rede.ini.local)
+
+`rede/rede.ini` é o exemplo rastreado pelo git e nunca deve ser editado em
+produção -- qualquer alteração local nele volta a causar o mesmo conflito de
+`git pull` que já aconteceu antes (um commit que toque em `rede.ini` sempre vai
+colidir com uma cópia que diverge do git, `skip-worktree` ou não). Em vez
+disso, valores específicos deste ambiente (e-mail de contato, e as chaves que
+`atualiza_base.py` mantém sozinho: `referencia_bd`, `exibe_mensagem_advertencia`
+e a seção `[RFB]`) vão em `rede/rede.ini.local`, um arquivo **não versionado**
+(está no `.gitignore`) que `rede_config.py` lê por último, sobrepondo o
+`rede.ini` padrão.
+
+Crie-o **antes do primeiro `docker-compose up`** (um bind mount de arquivo que
+não existe no host faz o Docker criar um diretório vazio nesse caminho dentro
+do container):
+
+```bash
+cat > ~/rede-cnpj/rede/rede.ini.local <<'EOF'
+[LOGIN]
+email=seu-email-de-contato@dominio
+
+[BASE]
+referencia_bd=
+
+[INICIO]
+exibe_mensagem_advertencia=
+
+[RFB]
+anoMes=
+urlBaseArquivosDoMes=
+urlPaginaDownloadMeses=
+EOF
+```
+
+As chaves de `[RFB]` precisam existir mesmo vazias -- `atualiza_ini_valor()` (em
+`atualiza_base.py`) só substitui o valor de uma chave já existente, nunca cria
+uma nova; `verifica_secao_rfb()` falha alto e claro no início do cron se
+faltar alguma, em vez de deixar para descobrir só depois da troca das bases em
+produção.
+
+---
+
 ### Criar os bancos de dados de produção
 
 ```bash
@@ -140,12 +182,11 @@ python rede_cria_tabela_rede.db.py
 # cria a tabela de vínculos cnpj_links_ete.db de endereços, de emails e de telefones utilizada na redeCNPJ: (1:45 h)
 python rede_cria_tabela_cnpj_links_ete.py
 
-# cnpj.db, rede.db, rede_search.db, cnpj_links_ete.db e rede.ini em rede/bases são
-# exemplos rastreados pelo git. Rode isto uma única vez, antes de sobrescrevê-los pela
+# cnpj.db, rede.db, rede_search.db e cnpj_links_ete.db em rede/bases são exemplos
+# rastreados pelo git. Rode isto uma única vez, antes de sobrescrevê-los pela
 # primeira vez, para o git parar de rastrear o conteúdo (senão toda base de produção
-# nova, ou toda troca automática de rede.ini pelo atualiza_base.py, aparecerá como
-# "modified" no git status, arriscando ser commitada por engano):
-cd ~/rede-cnpj && git update-index --skip-worktree rede/bases/cnpj.db rede/bases/rede.db rede/bases/rede_search.db rede/bases/cnpj_links_ete.db rede/rede.ini
+# nova aparecerá como "modified" no git status, arriscando ser commitada por engano):
+cd ~/rede-cnpj && git update-index --skip-worktree rede/bases/cnpj.db rede/bases/rede.db rede/bases/rede_search.db rede/bases/cnpj_links_ete.db
 
 # Ao final, mova os arquivos de rede_cria_tabelas/dados-publicos para a rede/bases
 cd ~/rede-cnpj/rede/bases && rm cnpj.db rede.db rede_search.db cnpj_links_ete.db
@@ -158,9 +199,11 @@ mv $HOME/rede-cnpj/rede_cria_tabelas/dados-publicos/rede_search.db $HOME/rede-cn
 
 mv $HOME/rede-cnpj/rede_cria_tabelas/dados-publicos/cnpj_links_ete.db $HOME/rede-cnpj/rede/bases/
 
-# Ajustar o arquivo rede.ini (só é necessário rodando estes passos manualmente;
-# rede_cria_tabelas/atualiza_base.py, descrito na próxima seção, faz isso sozinho)
-nano $HOME/rede-cnpj/rede/rede.ini
+# Ajustar o rede.ini.local (arquivo NÃO versionado -- ver seção "Configuração
+# específica de ambiente (rede.ini.local)" acima; só é necessário rodando estes
+# passos manualmente. rede_cria_tabelas/atualiza_base.py, descrito na próxima
+# seção, mantém referencia_bd/exibe_mensagem_advertencia/[RFB] sozinho depois disso)
+nano $HOME/rede-cnpj/rede/rede.ini.local
 
 referencia_bd = Abril/2025
 exibe_mensagem_advertencia = 0
@@ -182,11 +225,11 @@ Ele confere conectividade e autenticação com o GitHub, compara o commit local 
 
 ### Atualização automática diária (cron)
 
-Em vez de repetir os passos manuais acima a cada mês, `rede_cria_tabelas/atualiza_base.py` automatiza todo o processo — pensado para rodar via cron **todo dia**, não só uma vez por mês: a cada execução, primeiro consulta (PROPFIND, bem barato) qual é a referência (`anoMes`) mais recente disponível na Receita e compara com a que já está em produção (`rede/rede.ini`). Se for a mesma, o script só loga isso e termina sem fazer nada. Se for uma referência nova, baixa os zips, gera as 4 bases numa pasta de staging, valida cada uma (tamanho mínimo e contagem de linhas numa tabela-chave) e só então troca os arquivos em `rede/bases` de forma atômica, reiniciando o container.
+Em vez de repetir os passos manuais acima a cada mês, `rede_cria_tabelas/atualiza_base.py` automatiza todo o processo — pensado para rodar via cron **todo dia**, não só uma vez por mês: a cada execução, primeiro consulta (PROPFIND, bem barato) qual é a referência (`anoMes`) mais recente disponível na Receita e compara com a que já está em produção (`rede/rede.ini.local`). Se for a mesma, o script só loga isso e termina sem fazer nada. Se for uma referência nova, baixa os zips, gera as 4 bases numa pasta de staging, valida cada uma (tamanho mínimo e contagem de linhas numa tabela-chave) e só então troca os arquivos em `rede/bases` de forma atômica, reiniciando o container.
 
 A Receita normalmente publica a base do mês perto do **2º domingo**, mas às vezes atrasa (já aconteceu de atrasar 1-3 semanas) — por isso um cron diário funciona melhor do que fixar um dia do mês: a base nova é detectada e processada no dia seguinte à publicação, seja lá quando ela ocorrer, sem precisar reajustar o cron a cada vez que a Receita mudar a cadência.
 
-Se a execução for interrompida (queda de rede, falha do servidor da Receita, reinício da máquina etc.) antes de terminar, a próxima chamada do cron **retoma de onde parou** em vez de recomeçar do zero: etapas cujo arquivo de saída já existe e passa a checagem de sanidade são puladas. Se qualquer etapa falhar de verdade (não só "ainda não terminou"), a base em produção não é alterada (ou é restaurada a partir do backup, se a falha ocorrer durante a própria troca). Ele também mantém `rede/rede.ini` em dia: limpa `referencia_bd` e `exibe_mensagem_advertencia` (o rótulo/aviso de base de teste) e sincroniza a seção `[RFB]` com o mês mais recente disponível na Receita — os ajustes manuais de `rede.ini` do passo anterior não precisam ser repetidos.
+Se a execução for interrompida (queda de rede, falha do servidor da Receita, reinício da máquina etc.) antes de terminar, a próxima chamada do cron **retoma de onde parou** em vez de recomeçar do zero: etapas cujo arquivo de saída já existe e passa a checagem de sanidade são puladas. Se qualquer etapa falhar de verdade (não só "ainda não terminou"), a base em produção não é alterada (ou é restaurada a partir do backup, se a falha ocorrer durante a própria troca). Ele também mantém `rede/rede.ini.local` em dia: limpa `referencia_bd` e `exibe_mensagem_advertencia` (o rótulo/aviso de base de teste) e sincroniza a seção `[RFB]` com o mês mais recente disponível na Receita — os ajustes manuais de `rede.ini.local` do passo anterior não precisam ser repetidos.
 
 Nos dias em que há base nova para processar, exige pelo menos ~70GB livres no início (o conjunto novo de bases fica perto do tamanho do atual, mais a folga para os zips/csvs temporários da etapa de geração do cnpj.db) — o script aborta antes de começar se não houver espaço suficiente. Nos demais dias essa checagem nem roda.
 

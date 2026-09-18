@@ -48,7 +48,7 @@ from dados_cnpj_baixa_resiliente import consulta_base
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # rede_cria_tabelas/
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)  # rede-cnpj/
 BASES_DIR = os.path.join(REPO_ROOT, "rede", "bases")
-REDE_INI = os.path.join(REPO_ROOT, "rede", "rede.ini")
+REDE_INI = os.path.join(REPO_ROOT, "rede", "rede.ini.local")
 STAGING_DIR = os.path.join(SCRIPT_DIR, "dados-publicos")
 ZIP_DIR = os.path.join(SCRIPT_DIR, "dados-publicos-zip")
 DEPLOY_DIR = os.path.join(REPO_ROOT, "deploy")
@@ -298,11 +298,11 @@ def verifica_rede_ini():
 
 def verifica_secao_rfb():
     """As chaves anoMes/urlBaseArquivosDoMes/urlPaginaDownloadMeses da seção [RFB]
-    precisam já existir em rede.ini (mesmo vazias) -- atualiza_ini_valor() só
+    precisam já existir em rede.ini.local (mesmo vazias) -- atualiza_ini_valor() só
     substitui o valor de uma chave já existente, e essa chamada (atualiza_rede_ini)
     só acontece DEPOIS da troca dos arquivos em produção e do restart do container.
     Descobrir a falta de uma chave só nesse ponto seria o peor momento possível;
-    melhor falhar aqui, antes de tocar em qualquer coisa. Se faltar, o rede.ini de
+    melhor falhar aqui, antes de tocar em qualquer coisa. Se faltar, o rede.ini.local de
     produção provavelmente foi criado antes desta seção existir -- adicione manualmente:
         [RFB]
         anoMes=
@@ -326,7 +326,7 @@ def verifica_secao_rfb():
 
 
 def le_anoMes_producao():
-    """anoMes atualmente publicado em produção, lido de rede.ini (seção [RFB]).
+    """anoMes atualmente publicado em produção, lido de rede.ini.local (seção [RFB]).
     None se ainda não houver nenhuma referência gravada (ex.: primeira execução)."""
     with open(REDE_INI, encoding="utf-8") as f:
         for linha in f:
@@ -396,7 +396,7 @@ def metadados_rfb_de(parametros_site):
 
 
 def atualiza_ini_valor(caminho_ini, secao, chave, valor):
-    """Substitui o valor de uma chave já existente em rede.ini editando o texto linha
+    """Substitui o valor de uma chave já existente no .ini editando o texto linha
     a linha, em vez de usar configparser -- que regravaria o arquivo sem os
     comentários que documentam cada parâmetro."""
     with open(caminho_ini, encoding="utf-8") as f:
@@ -420,19 +420,19 @@ def atualiza_ini_valor(caminho_ini, secao, chave, valor):
 
 
 def atualiza_rede_ini(metadados_rfb):
-    """Aplica em rede.ini o que antes era feito manualmente a cada carga (ver
-    deploy/README.md, seção 'Criar os bancos de dados de produção'): limpa o rótulo
+    """Aplica em rede.ini.local (override de ambiente não versionado, ver
+    deploy/README.md) o que antes era feito manualmente a cada carga: limpa o rótulo
     de 'base de testes' e desliga o aviso de base de teste com nomes embaralhados (a
     data em si já é lida automaticamente do cnpj.db pela aplicação, essa parte não
     precisa de ajuste), e sincroniza a seção [RFB] usada pela API que informa aos
     usuários onde baixar o mês mais recente."""
-    logger.info("Atualizando rede.ini...")
+    logger.info("Atualizando rede.ini.local...")
     atualiza_ini_valor(REDE_INI, "BASE", "referencia_bd", "")
     atualiza_ini_valor(REDE_INI, "INICIO", "exibe_mensagem_advertencia", "0")
     atualiza_ini_valor(REDE_INI, "RFB", "anoMes", metadados_rfb["anoMes"])
     atualiza_ini_valor(REDE_INI, "RFB", "urlBaseArquivosDoMes", metadados_rfb["urlBaseArquivosDoMes"])
     atualiza_ini_valor(REDE_INI, "RFB", "urlPaginaDownloadMeses", metadados_rfb["urlPaginaDownloadMeses"])
-    logger.info("rede.ini atualizado (rótulos de teste limpos, [RFB] em %s).", metadados_rfb["anoMes"])
+    logger.info("rede.ini.local atualizado (rótulos de teste limpos, [RFB] em %s).", metadados_rfb["anoMes"])
 
 
 def reinicia_app():
@@ -533,7 +533,7 @@ def executa_pipeline():
 
     # bases novas já em produção e o container já reiniciado com elas: uma falha
     # daqui pra frente não deve reverter os arquivos .db (que estão corretos), só
-    # deixa o rede.ini para ser corrigido manualmente e o run reportado como falho.
+    # deixa o rede.ini.local para ser corrigido manualmente e o run reportado como falho.
     atualiza_rede_ini(metadados_rfb)
 
     remove_backups()

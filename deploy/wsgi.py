@@ -32,8 +32,10 @@ def load_app(script_path: str, app_var: str = "app") -> object:
         spec = importlib.util.spec_from_file_location(module_name, script_path)
         module = importlib.util.module_from_spec(spec)
 
-        # Garante que o rede.ini será encontrado
-        os.environ["CONFIG_PATH"] = str(Path(__file__).parent / "rede.ini")
+        # Aponta rede_config.py para o override de ambiente não versionado
+        # (rede.ini.local, ver deploy/README.md) -- rede.ini em si fica sempre
+        # igual ao que vem do git.
+        os.environ["CONFIG_PATH_LOCAL"] = str(Path(__file__).parent / "rede.ini.local")
 
         spec.loader.exec_module(module)
         flask_app = getattr(module, app_var)

@@ -87,10 +87,12 @@
 #   commitar) que poderiam ser sobrescritas pelo merge. Se houver, o diff é
 #   exibido e: no modo normal, pergunta se deseja descartar essas alterações
 #   e continuar; no modo --rapido, descarta automaticamente (git reset --hard)
-#   e segue. Isso NÃO afeta arquivos não versionados (untracked) nem
-#   rede/bases/*.db e rede/rede.ini, marcados com `git update-index
-#   --skip-worktree` (ver deploy/README.md) — o git nem os enxerga como
-#   modificados.
+#   e segue. Isso NÃO afeta arquivos não versionados (untracked, o que inclui
+#   rede/rede.ini.local -- ver deploy/README.md) nem rede/bases/*.db, marcados
+#   com `git update-index --skip-worktree` — o git nem os enxerga como
+#   modificados. rede/rede.ini em si não deve mais ser editado em produção
+#   (os valores que variam por ambiente vão em rede.ini.local), então não é
+#   esperado que apareça aqui.
 #
 # Qualquer falha em qualquer etapa (conectividade de rede, autenticação,
 # verificação de versão, atualização de código, build/troca do container)

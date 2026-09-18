@@ -12,3 +12,8 @@ rede_cria_tabelas/dados-publicos-zip/*
 rede_cria_tabelas/dados-publicos/*
 !rede_cria_tabelas/dados-publicos/*.txt
 rede_cria_tabelas/logs/
+
+# rede.ini.local: valores de config específicos do ambiente (email, referencia_bd,
+# [RFB], etc.), sobrepostos ao rede.ini padrão em tempo de execução -- nunca
+# versionado, ver deploy/README.md
+rede/rede.ini.local

@@ -105,7 +105,14 @@ curl "http://localhost/rede/api/ext/busca/cnpj_raiz/00000000"
 curl "http://localhost/rede/api/ext/dados?ids=PJ_00000000000000&socios=1"
 ```
 
-### Habilitando/desabilitando (`rede.ini`)
+### Habilitando/desabilitando (`rede.ini.local`)
+
+Em produção, `rede/rede.ini` é o exemplo rastreado pelo git e não deve ser
+editado no servidor. As chaves `api_ext_*` e `api_keys` vão em
+`rede/rede.ini.local` — arquivo **não versionado** (está no `.gitignore`) que
+`rede_config.py` lê por último, sobrepondo o `rede.ini` padrão. Veja
+[`deploy/README.md`](deploy/README.md#configuração-específica-de-ambiente-redeinilocal)
+para como criá-lo a partir de `rede/rede.ini.local.example`.
 
 ```ini
 [API]
@@ -114,9 +121,15 @@ api_ext_dados=1           # habilita /dados
 api_ext_requer_chave=0    # 1 = exige api_key válida (ver abaixo) em todas as rotas /api/ext
 ```
 
-Como `rede/bases` e `rede/rede.ini` são montados como volume no
-docker-compose (não fazem parte da imagem), basta editar `rede.ini` e rodar
-`docker-compose restart app` — não precisa rebuild.
+Se `rede.ini.local` não tiver essas chaves, os endpoints `/api/ext/...` ficam
+desativados (`getboolean` cai no `False` padrão) em vez de dar erro.
+
+Como `rede/bases`, `rede/rede.ini` e `rede/rede.ini.local` são montados como
+volume no docker-compose (não fazem parte da imagem), basta editar
+`rede.ini.local` e rodar `docker-compose restart app` — não precisa rebuild.
+(Em ambiente local sem Docker, sem a variável `CONFIG_PATH_LOCAL` que o
+`deploy/wsgi.py` define, `rede_config.py` procura `rede.ini.local` na pasta
+de trabalho atual.)
 
 ### Autenticação por chave (opcional)
 
@@ -129,9 +142,9 @@ curl "http://localhost/rede/api/ext/dados?ids=PJ_...&api_key=SUACHAVE"
 curl -H "X-API-Key: SUACHAVE" "http://localhost/rede/api/ext/dados?ids=PJ_..."
 ```
 
-As chaves válidas são as mesmas configuradas em `[API] api_keys` no
-`rede.ini` (usadas também pela rota original `/api/caminhos`), separadas por
-vírgula:
+As chaves válidas são as mesmas configuradas em `[API] api_keys` em
+`rede.ini.local` (usadas também pela rota original `/api/caminhos`),
+separadas por vírgula:
 
 ```ini
 [API]

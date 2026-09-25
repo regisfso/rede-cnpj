@@ -58,6 +58,7 @@ O prefixo de rota segue o `subdomain` configurado em `rede.ini`
 |---|---|---|
 | `GET /rede/api/ext/busca/nome` | Busca ids por nome/razão social (full text) | `q` (obrigatório), `limite` (padrão 10, máx. 100) |
 | `GET /rede/api/ext/busca/cnpj_raiz/<cnpj_basico>` | Busca ids de filiais a partir da raiz do CNPJ (8 dígitos) | `limite` (padrão 10, máx. 200) |
+| `GET /rede/api/ext/busca/cnae/<codigo>` | Busca ids de empresas pelo CNAE fiscal principal (7 dígitos) | `limite` (padrão 10, máx. 200) |
 | `GET /rede/api/ext/busca/cpf/<cpf_parcial>` | Busca ids de sócios PF pelo miolo do CPF (mín. 9 dígitos) | `limite` (padrão 10, máx. 100) |
 | `GET /rede/api/ext/dados` | Retorna dados completos de uma lista de ids (CNPJ/CPF) | `ids` (obrigatório, separados por vírgula, ex. `PJ_12345678000199,PJ_...`), `socios` (`1` para incluir sócios) |
 
@@ -76,6 +77,8 @@ curl "http://localhost/rede/api/ext/busca/nome?q=BANCO%20DO%20BRASIL&limite=50"
 
 curl "http://localhost/rede/api/ext/busca/cnpj_raiz/00000000?limite=150"
 
+curl "http://localhost/rede/api/ext/busca/cnae/6810202?limite=50"
+
 curl "http://localhost/rede/api/ext/busca/cpf/123456789?limite=30"
 ```
 
@@ -88,6 +91,7 @@ ou como `0`, cai no padrão de 10.
 |---|---|---|
 | `/busca/nome` | 100 | `rede_sqlite_cnpj.buscaPorNome` |
 | `/busca/cnpj_raiz/<cnpj_basico>` | 200 | `rede_sqlite_cnpj.busca_cnpj` |
+| `/busca/cnae/<codigo>` | 200 | `rede_sqlite_cnpj.busca_cnae` |
 | `/busca/cpf/<cpf_parcial>` | 100 | `rede_sqlite_cnpj.busca_cpf` |
 | `/dados` | **sem limite** — processa todos os `ids` enviados | `rede_sqlite_cnpj.jsonDados` |
 
@@ -170,5 +174,24 @@ O blueprint fica em `rede/modulos/api_ext/rede_api_ext.py` e reaproveita as
 funções de acesso a dados já existentes em `rede/rede_sqlite_cnpj.py`
 (`buscaPorNome`, `busca_cnpj`, `busca_cpf`, `jsonDados`) — nenhuma lógica de
 consulta ao banco foi duplicada. O registro do blueprint acontece só em
-`deploy/wsgi.py`; `rede/rede.py` e `rede/rede_sqlite_cnpj.py` permanecem
-inalterados.
+`deploy/wsgi.py`; `rede/rede.py` permanece inalterado.
+
+`busca_cnae` (usada por `/busca/cnae/<codigo>`) é a exceção: diferente das
+demais buscas, que usam a tabela virtual FTS5 `id_search` (pensada para busca
+textual livre por nome/descrição), CNAE fiscal é um código de igualdade
+exata, então a consulta é direta em `estabelecimento.cnae_fiscal`, usando o
+índice `idx_estabelecimento_cnae_fiscal` (criado junto com os demais índices
+de `estabelecimento` em `rede_cria_tabelas/dados_cnpj_para_sqlite.py`).
+Bases já geradas antes dessa mudança precisam rodar
+`CREATE INDEX idx_estabelecimento_cnae_fiscal ON estabelecimento (cnae_fiscal);`
+manualmente para não cair em table scan.
+
+**Zero à esquerda:** parte dos registros de `estabelecimento.cnae_fiscal` tem
+o zero à esquerda do código oficial suprimido (ex.: `151201` em vez de
+`0151201`) — afeta só as seções A e B da CNAE (agropecuária, pesca e
+indústrias extrativas, os únicos códigos que começam com `0`); a tabela
+`cnae` (referência oficial) sempre tem os 7 dígitos corretos. `busca_cnae`
+já busca as duas variantes (`cnae_fiscal in (:codigo, :codigo_sem_zero)`)
+para não perder esses registros — confirmado batendo o código de 7 dígitos
+contra a tabela `cnae` para todos os 122 códigos de 6 dígitos existentes na
+base local de teste.

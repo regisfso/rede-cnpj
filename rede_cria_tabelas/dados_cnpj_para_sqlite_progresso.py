@@ -219,6 +219,7 @@ executa_sqls('indices_base', '''
     CREATE  INDEX idx_estabelecimento_cnpj_basico ON estabelecimento (cnpj_basico);
     CREATE  INDEX idx_estabelecimento_cnpj ON estabelecimento (cnpj);
     CREATE  INDEX idx_estabelecimento_nomefantasia ON estabelecimento (nome_fantasia);
+    CREATE  INDEX idx_estabelecimento_cnae_fiscal ON estabelecimento (cnae_fiscal);
 
     CREATE INDEX idx_socios_original_cnpj_basico
     ON socios_original(cnpj_basico);

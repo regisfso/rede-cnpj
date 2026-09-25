@@ -73,6 +73,17 @@ def criar_blueprint(rede_mod):
             ids = _com_lock(rede_relacionamentos.busca_cnpj, cnpj_basico, limite)
             return _resposta_json({'ids': sorted(ids)})
 
+        @bp.route('/busca/cnae/<codigo>', methods=['GET'])
+        @limiter.limit(limiter_dados)
+        def busca_cnae_codigo(codigo):
+            if cfg['API'].getboolean('api_ext_requer_chave', False):
+                _checa_chave()
+            if not (codigo.isdigit() and len(codigo) == 7):
+                return abort(400, description='codigo deve ter 7 dígitos')
+            limite = request.args.get('limite', 10, type=int)
+            ids = _com_lock(rede_relacionamentos.busca_cnae, codigo, limite)
+            return _resposta_json({'ids': sorted(ids)})
+
         @bp.route('/busca/cpf/<cpf_parcial>', methods=['GET'])
         @limiter.limit(limiter_dados)
         def busca_cpf_parcial(cpf_parcial):

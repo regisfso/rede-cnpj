@@ -235,7 +235,42 @@ def busca_cnpj(cnpj_basico, limiteIn):
     con = None
     return spj
 #.def busca_cnpj
-    
+
+def busca_cnae(codigo, limiteIn):
+    '''busca ids de empresas cujo cnae_fiscal (principal) seja igual a codigo.
+    diferente de busca_cnpj/busca_cpf, não usa a FTS id_search (que indexa
+    id/descrição para texto livre) -- cnae_fiscal é um código de igualdade
+    exata, então a consulta é direta na tabela estabelecimento, usando o
+    índice idx_estabelecimento_cnae_fiscal.
+
+    codigo_sem_zero: parte da base tem cnae_fiscal gravado sem o zero à
+    esquerda (ex.: "151201" em vez de "0151201") -- confirmado contra a
+    tabela cnae (que sempre tem os 7 dígitos oficiais); afeta só os códigos
+    das seções A/B da CNAE, que começam com 0 (agropecuária, pesca e
+    indústrias extrativas). Sem essa segunda variante no IN, buscar por
+    qualquer CNAE desses setores usando o código oficial de 7 dígitos não
+    encontraria nada.'''
+    kLimiteCnae = 200
+
+    limite = min(limiteIn, kLimiteCnae) if limiteIn else 10
+    codigo_sem_zero = codigo.lstrip('0') or '0'
+
+    query = '''
+            SELECT cnpj
+            FROM estabelecimento
+            where cnae_fiscal in (:codigo, :codigo_sem_zero)
+            limit :limite '''
+    with contextlib.closing(sqlite3.connect(caminhoDBReceita, uri=True)) as con: #sintaxe para autoclose
+        con.row_factory=sqlite3.Row
+        cur = con.cursor()
+        cur.execute(query, {'codigo':codigo,'codigo_sem_zero':codigo_sem_zero,'limite':limite})
+        scnae = {'PJ_'+k['cnpj'] for k in cur}
+        cur.close()
+    cur = None
+    con = None
+    return scnae
+#.def busca_cnae
+
 def busca_cpf(cpfin, limiteIn):
     '''como a base não tem cpfs de sócios completos, faz busca só do miolo. retorna PF_xxx-nome'''
     #print('busca_cpf')
